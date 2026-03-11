@@ -114,6 +114,13 @@ async function exchangeCodeForTokens(
     state,
   };
 
+  console.log(`[oauth] Token exchange POST ${OAUTH_TOKEN_URL}`);
+  console.log(`[oauth]   client_id: ${body.client_id}`);
+  console.log(`[oauth]   redirect_uri: ${body.redirect_uri}`);
+  console.log(`[oauth]   code length: ${body.code.length}`);
+  console.log(`[oauth]   code_verifier length: ${body.code_verifier.length}`);
+  console.log(`[oauth]   state length: ${body.state.length}`);
+
   const res = await fetch(OAUTH_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -121,8 +128,11 @@ async function exchangeCodeForTokens(
     signal: AbortSignal.timeout(60_000),
   });
 
+  console.log(`[oauth] Token endpoint responded: ${res.status}`);
+
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+    console.log(`[oauth] Error body: ${text}`);
     if (res.status === 401) {
       throw new Error("Authentication failed: invalid or expired authorization code.");
     }
@@ -146,17 +156,28 @@ function extractAuthCode(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) throw new Error("Auth code is required");
 
+  // If pasted as a URL, extract the code query parameter.
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
     try {
       const codeFromUrl = new URL(trimmed).searchParams.get("code")?.trim();
-      if (codeFromUrl) return codeFromUrl;
+      if (codeFromUrl) return splitCodeFromState(codeFromUrl);
     } catch { /* fall through */ }
   }
 
   const match = trimmed.match(AUTH_CODE_PATTERN);
-  if (match?.[1]) return decodeURIComponent(match[1]).trim();
+  if (match?.[1]) return splitCodeFromState(decodeURIComponent(match[1]).trim());
 
-  return trimmed;
+  return splitCodeFromState(trimmed);
+}
+
+/**
+ * The callback page shows the value as CODE#STATE.
+ * The CLI splits on '#' and only uses the code portion.
+ * Strip the state suffix so we send only the auth code.
+ */
+function splitCodeFromState(value: string): string {
+  const idx = value.indexOf("#");
+  return idx >= 0 ? value.slice(0, idx) : value;
 }
 
 /* ------------------------------------------------------------------ */
@@ -246,6 +267,13 @@ class OAuthLoginSession {
     }
 
     const code = extractAuthCode(rawCode);
+    const redacted = code.length > 12
+      ? `${code.slice(0, 6)}…${code.slice(-4)} (${code.length} chars)`
+      : `(${code.length} chars)`;
+    this.log(`[oauth] Raw input length: ${rawCode.trim().length}, extracted code: ${redacted}`);
+    if (rawCode.trim() !== code) {
+      this.log(`[oauth] Input was transformed (URL/param extraction applied)`);
+    }
     this.phase = "exchanging";
     this.error = null;
     this.log("[oauth] Exchanging authorization code for tokens (this can take up to 30 seconds)…");
