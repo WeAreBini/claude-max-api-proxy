@@ -47,9 +47,35 @@ interface NormalizedAuthCode {
   readonly source: "raw" | "query_string" | "callback_url";
 }
 
+interface SpawnCommand {
+  readonly command: string;
+  readonly args: readonly string[];
+}
+
 const MAX_LOG_LINES = 120;
 const AUTH_URL_PATTERN = /(https:\/\/claude\.ai\/oauth\/authorize\?\S+)/;
 const AUTH_CODE_PATTERN = /(?:^|[?&#])code=([^&#\s]+)/i;
+
+function getClaudeLoginSpawnCommand(): SpawnCommand {
+  if (process.platform === "darwin") {
+    return {
+      command: "script",
+      args: ["-q", "/dev/null", "claude", "auth", "login"],
+    };
+  }
+
+  if (process.platform === "linux") {
+    return {
+      command: "script",
+      args: ["-q", "-c", "claude auth login", "/dev/null"],
+    };
+  }
+
+  return {
+    command: "claude",
+    args: ["auth", "login"],
+  };
+}
 
 function normalizeAuthCode(input: string): NormalizedAuthCode {
   const trimmedInput = input.trim();
@@ -120,10 +146,16 @@ class ClaudeLoginSession {
     this.phase = "starting";
     this.startedAt = new Date().toISOString();
 
-    this.process = spawn("claude", ["auth", "login"], {
+    const loginCommand = getClaudeLoginSpawnCommand();
+
+    this.process = spawn(loginCommand.command, [...loginCommand.args], {
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
+
+    if (loginCommand.command !== "claude") {
+      this.appendLog(`[process] Started Claude login via ${loginCommand.command} PTY wrapper`);
+    }
 
     this.process.stdout?.on("data", (chunk: Buffer) => {
       this.stdoutBuffer += chunk.toString();
@@ -193,6 +225,7 @@ class ClaudeLoginSession {
         : "[input] Extracted auth code from callback URL submitted in setup UI"
     );
     this.process.stdin?.write(`${normalizedCode.code}\n`);
+    this.appendLog("[process] Auth code forwarded to Claude login session");
     return this.getSnapshot();
   }
 
@@ -778,7 +811,8 @@ function renderSetupPage(req: Request): string {
             </div>
           </div>
           <p id="authUrlEmptyState" class="hint">The sign-in link appears here after you start the login.</p>
-          <p class="hint" style="margin-top: 10px;">If Anthropic shows <code>Authorization failed</code> or <code>Internal server error</code> after sign-in, copy the full browser address from that error page and paste it into step 3. If the address contains <code>code=</code>, this setup page can still extract it.</p>
+          <p class="hint" style="margin-top: 10px;">If Anthropic shows <code>Authorization failed</code>, <code>Internal server error</code>, or <code>upstream connect error ... overflow</code> after sign-in, copy the full browser address from that error page and paste it into step 3. If the address contains <code>code=</code>, this setup page can still extract it.</p>
+          <p class="hint" style="margin-top: 8px;">The <code>overflow</code> variant usually points to Anthropic-side cookies, a browser extension, or a proxy in front of <code>claude.ai</code>. Retry in a private window or another browser before starting a fresh login.</p>
         </li>
         <li class="step">
           <div class="step-head">
