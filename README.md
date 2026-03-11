@@ -76,6 +76,7 @@ node dist/server/standalone.js
 The server runs at `http://localhost:3456` by default.
 
 If Claude CLI is not authenticated yet, the server now stays up in setup mode so you can complete login in the browser at `http://localhost:3456/setup` instead of failing on boot.
+After browser sign-in, the setup page accepts either the raw auth code or the full callback URL.
 
 You can also override the bind address and port for container platforms:
 

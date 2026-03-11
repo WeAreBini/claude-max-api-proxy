@@ -36,6 +36,9 @@ export interface ClaudeAuthStatus {
   readonly loggedIn: boolean;
   readonly authMethod: string;
   readonly apiProvider: string;
+  readonly email?: string;
+  readonly orgName?: string;
+  readonly subscriptionType?: string;
   readonly raw: unknown;
 }
 
@@ -283,6 +286,10 @@ export async function getClaudeAuthStatus(): Promise<ClaudeAuthStatus> {
           loggedIn: parsed.loggedIn === true,
           authMethod: typeof parsed.authMethod === "string" ? parsed.authMethod : "unknown",
           apiProvider: typeof parsed.apiProvider === "string" ? parsed.apiProvider : "unknown",
+          email: typeof parsed.email === "string" ? parsed.email : undefined,
+          orgName: typeof parsed.orgName === "string" ? parsed.orgName : undefined,
+          subscriptionType:
+            typeof parsed.subscriptionType === "string" ? parsed.subscriptionType : undefined,
           raw: parsed,
         });
       } catch {
