@@ -1,11 +1,15 @@
 /**
  * Admin setup UI and diagnostics endpoints.
  *
- * Provides a minimal browser-based setup flow for Claude CLI login on headless hosts,
- * plus runtime diagnostics useful for Railway and similar platforms.
+ * Implements a direct OAuth PKCE flow against Claude.ai so that
+ * headless hosts (Railway, Docker, etc.) can authenticate without
+ * needing a local browser or PTY. The proxy builds the authorization
+ * URL, the operator opens it in *any* browser, pastes the resulting
+ * auth code back, and the proxy exchanges it for tokens and writes
+ * them where the CLI expects them.
  */
 
-import { spawn, type ChildProcess } from "child_process";
+import crypto from "crypto";
 import os from "os";
 import path from "path";
 import fs from "fs/promises";
@@ -13,25 +17,160 @@ import type { Request, Response } from "express";
 import {
   getClaudeAuthStatus,
   verifyClaude,
-  type ClaudeAuthStatus,
 } from "../subprocess/manager.js";
+
+/* ------------------------------------------------------------------ */
+/*  OAuth constants (extracted from Claude Code CLI v2.1.72 source)    */
+/* ------------------------------------------------------------------ */
+
+const OAUTH_CLIENT_ID =
+  process.env.CLAUDE_CODE_OAUTH_CLIENT_ID || "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
+const OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+const OAUTH_MANUAL_REDIRECT_URL = "https://platform.claude.com/oauth/code/callback";
+const OAUTH_SCOPES = [
+  "user:inference",
+  "user:profile",
+  "org:create_api_key",
+  "user:sessions:claude_code",
+  "user:mcp_servers",
+];
+
+/* ------------------------------------------------------------------ */
+/*  PKCE helpers                                                       */
+/* ------------------------------------------------------------------ */
+
+function generateCodeVerifier(): string {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function computeCodeChallenge(verifier: string): string {
+  return crypto.createHash("sha256").update(verifier).digest("base64url");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Credential file helpers                                            */
+/* ------------------------------------------------------------------ */
+
+function getClaudeConfigDir(): string {
+  return (process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude"));
+}
+
+function getCredentialsPath(): string {
+  return path.join(getClaudeConfigDir(), ".credentials.json");
+}
+
+interface StoredCredentials {
+  claudeAiOauth?: {
+    accessToken: string;
+    refreshToken: string | null;
+    expiresAt: number;
+    scopes: string[];
+    subscriptionType: string | null;
+    rateLimitTier: string | null;
+  };
+  [key: string]: unknown;
+}
+
+async function readStoredCredentials(): Promise<StoredCredentials | null> {
+  try {
+    const raw = await fs.readFile(getCredentialsPath(), "utf8");
+    return JSON.parse(raw) as StoredCredentials;
+  } catch {
+    return null;
+  }
+}
+
+async function writeStoredCredentials(creds: StoredCredentials): Promise<void> {
+  const dir = getClaudeConfigDir();
+  await fs.mkdir(dir, { recursive: true });
+  const filePath = getCredentialsPath();
+  await fs.writeFile(filePath, JSON.stringify(creds), { encoding: "utf8", mode: 0o600 });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Token exchange                                                     */
+/* ------------------------------------------------------------------ */
+
+interface TokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  scope?: string;
+  token_type?: string;
+}
+
+async function exchangeCodeForTokens(
+  authCode: string,
+  codeVerifier: string,
+  state: string,
+): Promise<TokenResponse> {
+  const body = {
+    grant_type: "authorization_code",
+    code: authCode,
+    redirect_uri: OAUTH_MANUAL_REDIRECT_URL,
+    client_id: OAUTH_CLIENT_ID,
+    code_verifier: codeVerifier,
+    state,
+  };
+
+  const res = await fetch(OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    if (res.status === 401) {
+      throw new Error("Authentication failed: invalid or expired authorization code.");
+    }
+    throw new Error(`Token exchange failed (${res.status}): ${text}`);
+  }
+
+  return (await res.json()) as TokenResponse;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Auth-code extraction (accepts raw code, callback URL, or query)    */
+/* ------------------------------------------------------------------ */
+
+const AUTH_CODE_PATTERN = /(?:^|[?&#])code=([^&#\s]+)/i;
+
+function extractAuthCode(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) throw new Error("Auth code is required");
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    try {
+      const codeFromUrl = new URL(trimmed).searchParams.get("code")?.trim();
+      if (codeFromUrl) return codeFromUrl;
+    } catch { /* fall through */ }
+  }
+
+  const match = trimmed.match(AUTH_CODE_PATTERN);
+  if (match?.[1]) return decodeURIComponent(match[1]).trim();
+
+  return trimmed;
+}
+
+/* ------------------------------------------------------------------ */
+/*  OAuth session (in-memory state for a single login attempt)         */
+/* ------------------------------------------------------------------ */
 
 type LoginPhase =
   | "idle"
-  | "starting"
   | "waiting_for_code"
-  | "submitting_code"
+  | "exchanging"
   | "succeeded"
-  | "failed"
-  | "cancelled";
+  | "failed";
 
 interface LoginSnapshot {
   readonly phase: LoginPhase;
-  readonly active: boolean;
+  readonly authUrl: string | null;
   readonly startedAt: string | null;
   readonly finishedAt: string | null;
-  readonly authUrl: string | null;
-  readonly lastExitCode: number | null;
   readonly error: string | null;
   readonly logs: readonly string[];
 }
@@ -42,292 +181,145 @@ interface ConfigDirectorySummary {
   readonly entries: readonly string[];
 }
 
-interface NormalizedAuthCode {
-  readonly code: string;
-  readonly source: "raw" | "query_string" | "callback_url";
-}
+const MAX_LOG_LINES = 80;
 
-interface SpawnCommand {
-  readonly command: string;
-  readonly args: readonly string[];
-}
-
-const MAX_LOG_LINES = 120;
-const AUTH_URL_PATTERN = /(https:\/\/claude\.ai\/oauth\/authorize\?\S+)/;
-const AUTH_CODE_PATTERN = /(?:^|[?&#])code=([^&#\s]+)/i;
-
-function getClaudeLoginSpawnCommand(): SpawnCommand {
-  if (process.platform === "darwin") {
-    return {
-      command: "script",
-      args: ["-q", "/dev/null", "claude", "auth", "login"],
-    };
-  }
-
-  if (process.platform === "linux") {
-    return {
-      command: "script",
-      args: ["-q", "-c", "claude auth login", "/dev/null"],
-    };
-  }
-
-  return {
-    command: "claude",
-    args: ["auth", "login"],
-  };
-}
-
-function normalizeAuthCode(input: string): NormalizedAuthCode {
-  const trimmedInput = input.trim();
-  if (!trimmedInput) {
-    throw new Error("Auth code is required");
-  }
-
-  if (trimmedInput.startsWith("http://") || trimmedInput.startsWith("https://")) {
-    try {
-      const parsedUrl = new URL(trimmedInput);
-      const codeFromUrl = parsedUrl.searchParams.get("code")?.trim();
-      if (codeFromUrl) {
-        return {
-          code: codeFromUrl,
-          source: "callback_url",
-        };
-      }
-    } catch {
-      // Fall through to the regex-based parsing below.
-    }
-  }
-
-  const codeMatch = trimmedInput.match(AUTH_CODE_PATTERN);
-  if (codeMatch?.[1]) {
-    return {
-      code: decodeURIComponent(codeMatch[1]).trim(),
-      source: "query_string",
-    };
-  }
-
-  return {
-    code: trimmedInput,
-    source: "raw",
-  };
-}
-
-class ClaudeLoginSession {
-  private process: ChildProcess | null = null;
-  private stdoutBuffer = "";
-  private stderrBuffer = "";
-  private logs: string[] = [];
+class OAuthLoginSession {
   private phase: LoginPhase = "idle";
+  private codeVerifier: string | null = null;
+  private state: string | null = null;
   private authUrl: string | null = null;
-  private error: string | null = null;
   private startedAt: string | null = null;
   private finishedAt: string | null = null;
-  private lastExitCode: number | null = null;
+  private error: string | null = null;
+  private logs: string[] = [];
 
   getSnapshot(): LoginSnapshot {
     return {
       phase: this.phase,
-      active: this.process !== null && this.process.exitCode === null,
+      authUrl: this.authUrl,
       startedAt: this.startedAt,
       finishedAt: this.finishedAt,
-      authUrl: this.authUrl,
-      lastExitCode: this.lastExitCode,
       error: this.error,
       logs: [...this.logs],
     };
   }
 
+  /** Generate PKCE pair and build the Claude.ai authorization URL. */
   start(): LoginSnapshot {
-    if (this.process && this.process.exitCode === null) {
-      return this.getSnapshot();
-    }
-
     this.reset();
-    this.phase = "starting";
+    this.codeVerifier = generateCodeVerifier();
+    this.state = crypto.randomBytes(16).toString("hex");
+    const challenge = computeCodeChallenge(this.codeVerifier);
+
+    const url = new URL(OAUTH_AUTHORIZE_URL);
+    url.searchParams.set("code", "true");
+    url.searchParams.set("client_id", OAUTH_CLIENT_ID);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("redirect_uri", OAUTH_MANUAL_REDIRECT_URL);
+    url.searchParams.set("scope", OAUTH_SCOPES.join(" "));
+    url.searchParams.set("code_challenge", challenge);
+    url.searchParams.set("code_challenge_method", "S256");
+    url.searchParams.set("state", this.state);
+
+    this.authUrl = url.toString();
+    this.phase = "waiting_for_code";
     this.startedAt = new Date().toISOString();
-
-    const loginCommand = getClaudeLoginSpawnCommand();
-
-    this.process = spawn(loginCommand.command, [...loginCommand.args], {
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    if (loginCommand.command !== "claude") {
-      this.appendLog(`[process] Started Claude login via ${loginCommand.command} PTY wrapper`);
-    }
-
-    this.process.stdout?.on("data", (chunk: Buffer) => {
-      this.stdoutBuffer += chunk.toString();
-      this.consumeBuffer("stdout");
-    });
-
-    this.process.stderr?.on("data", (chunk: Buffer) => {
-      this.stderrBuffer += chunk.toString();
-      this.consumeBuffer("stderr");
-    });
-
-    this.process.on("error", (error: Error) => {
-      if (this.phase === "succeeded") {
-        return;
-      }
-
-      this.error = error.message;
-      this.phase = "failed";
-      this.appendLog(`[process] ${error.message}`);
-    });
-
-    this.process.on("close", (code: number | null) => {
-      this.lastExitCode = code;
-      this.finishedAt = new Date().toISOString();
-
-      if (this.phase === "succeeded" || this.phase === "cancelled") {
-        this.process = null;
-        return;
-      }
-
-      if (code === 0) {
-        this.phase = "succeeded";
-        this.error = null;
-        this.appendLog("[process] Claude login completed successfully");
-      } else {
-        this.phase = "failed";
-        if (!this.error) {
-          this.error = `Claude login exited with code ${code}`;
-        }
-        this.appendLog(`[process] Claude login exited with code ${code}`);
-      }
-
-      this.process = null;
-    });
-
+    this.log("[oauth] Generated PKCE pair and authorization URL");
     return this.getSnapshot();
   }
 
-  submitCode(code: string): LoginSnapshot {
-    if (!this.process || this.process.exitCode !== null) {
-      throw new Error("No active Claude login session");
-    }
-
-    if (this.phase === "submitting_code") {
+  /** Exchange an authorization code for tokens and write credentials. */
+  async submit(rawCode: string): Promise<LoginSnapshot> {
+    if (this.phase !== "waiting_for_code") {
       throw new Error(
-        "Auth code already submitted. Wait for Claude login to finish, or cancel and start again."
+        this.phase === "exchanging"
+          ? "Token exchange already in progress."
+          : "Start a new login first.",
       );
     }
-
-    const normalizedCode = normalizeAuthCode(code);
-
-    this.phase = "submitting_code";
-    this.error = null;
-    this.appendLog(
-      normalizedCode.source === "raw"
-        ? "[input] Submitted auth code from setup UI"
-        : "[input] Extracted auth code from callback URL submitted in setup UI"
-    );
-    this.process.stdin?.write(`${normalizedCode.code}\n`);
-    this.appendLog("[process] Auth code forwarded to Claude login session");
-    return this.getSnapshot();
-  }
-
-  reconcile(authStatus: ClaudeAuthStatus): void {
-    const canReconcile =
-      authStatus.loggedIn &&
-      this.startedAt !== null &&
-      this.phase !== "idle" &&
-      this.phase !== "cancelled" &&
-      this.phase !== "succeeded";
-
-    if (!canReconcile) {
-      return;
+    if (!this.codeVerifier || !this.state) {
+      throw new Error("No active PKCE session — start a new login.");
     }
 
-    this.phase = "succeeded";
+    const code = extractAuthCode(rawCode);
+    this.phase = "exchanging";
     this.error = null;
-    this.finishedAt ??= new Date().toISOString();
-    this.appendLog("[process] Claude auth detected via status check");
+    this.log("[oauth] Exchanging authorization code for tokens…");
 
-    if (this.process && this.process.exitCode === null) {
-      this.process.kill("SIGTERM");
+    try {
+      const tokens = await exchangeCodeForTokens(code, this.codeVerifier, this.state);
+      this.log("[oauth] Token exchange succeeded");
+
+      const expiresIn = tokens.expires_in ?? 3600;
+      const scopes = tokens.scope?.split(" ").filter(Boolean) ?? [...OAUTH_SCOPES];
+      const existing = await readStoredCredentials();
+      const creds: StoredCredentials = existing ?? {};
+      creds.claudeAiOauth = {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token ?? null,
+        expiresAt: Date.now() + expiresIn * 1000,
+        scopes,
+        subscriptionType: null,
+        rateLimitTier: null,
+      };
+      await writeStoredCredentials(creds);
+      this.log(`[oauth] Credentials written to ${getCredentialsPath()}`);
+
+      this.phase = "succeeded";
+      this.finishedAt = new Date().toISOString();
+      this.log("[oauth] Login complete");
+      return this.getSnapshot();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.phase = "failed";
+      this.error = message;
+      this.finishedAt = new Date().toISOString();
+      this.log(`[oauth] ${message}`);
+      return this.getSnapshot();
     }
   }
 
   cancel(): LoginSnapshot {
-    if (this.process && this.process.exitCode === null) {
-      this.phase = "cancelled";
-      this.finishedAt = new Date().toISOString();
-      this.appendLog("[process] Claude login cancelled from setup UI");
-      this.process.kill("SIGTERM");
+    if (this.phase === "waiting_for_code" || this.phase === "failed") {
+      this.log("[oauth] Login cancelled");
+      this.reset();
     }
-
     return this.getSnapshot();
   }
 
+  /** If auth is already valid (e.g. via env var), upgrade phase. */
+  reconcile(loggedIn: boolean): void {
+    if (loggedIn && this.phase !== "succeeded") {
+      this.phase = "succeeded";
+      this.finishedAt ??= new Date().toISOString();
+      this.log("[oauth] Already authenticated (detected via CLI status)");
+    }
+  }
+
   private reset(): void {
-    this.stdoutBuffer = "";
-    this.stderrBuffer = "";
-    this.logs = [];
     this.phase = "idle";
+    this.codeVerifier = null;
+    this.state = null;
     this.authUrl = null;
-    this.error = null;
     this.startedAt = null;
     this.finishedAt = null;
-    this.lastExitCode = null;
+    this.error = null;
+    this.logs = [];
   }
 
-  private consumeBuffer(stream: "stdout" | "stderr"): void {
-    const buffer = stream === "stdout" ? this.stdoutBuffer : this.stderrBuffer;
-    const lines = buffer.split(/\r?\n/);
-    const remainder = lines.pop() ?? "";
-
-    for (const line of lines) {
-      this.handleLine(line.trim());
-    }
-
-    if (stream === "stdout") {
-      this.stdoutBuffer = remainder;
-    } else {
-      this.stderrBuffer = remainder;
-    }
-
-    const combinedBuffer = `${this.stdoutBuffer} ${this.stderrBuffer}`.trim();
-    this.captureAuthUrl(combinedBuffer);
-  }
-
-  private handleLine(line: string): void {
-    if (!line) {
-      return;
-    }
-
-    this.appendLog(line);
-    this.captureAuthUrl(line);
-  }
-
-  private captureAuthUrl(value: string): void {
-    if (this.authUrl) {
-      return;
-    }
-
-    const match = value.match(AUTH_URL_PATTERN);
-    if (!match?.[1]) {
-      return;
-    }
-
-    this.authUrl = match[1];
-    if (this.phase === "starting") {
-      this.phase = "waiting_for_code";
-    }
-    this.appendLog("[process] Captured Claude login URL");
-  }
-
-  private appendLog(message: string): void {
-    this.logs.push(message);
+  private log(msg: string): void {
+    this.logs.push(msg);
     if (this.logs.length > MAX_LOG_LINES) {
       this.logs = this.logs.slice(-MAX_LOG_LINES);
     }
   }
 }
 
-const loginSession = new ClaudeLoginSession();
+const loginSession = new OAuthLoginSession();
+
+/* ------------------------------------------------------------------ */
+/*  Admin auth & status helpers                                        */
+/* ------------------------------------------------------------------ */
 
 function getAdminTokenFromRequest(req: Request): string | null {
   const bearerToken = req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
@@ -338,45 +330,25 @@ function getAdminTokenFromRequest(req: Request): string | null {
 
 function isAdminAuthorized(req: Request): boolean {
   const configuredToken = process.env.ADMIN_TOKEN;
-  if (!configuredToken) {
-    return true;
-  }
-
+  if (!configuredToken) return true;
   return getAdminTokenFromRequest(req) === configuredToken;
 }
 
 function requireAdmin(req: Request, res: Response): boolean {
-  if (isAdminAuthorized(req)) {
-    return true;
-  }
-
+  if (isAdminAuthorized(req)) return true;
   res.status(401).json({
-    error: {
-      message: "Unauthorized",
-      type: "authentication_error",
-      code: "admin_token_required",
-    },
+    error: { message: "Unauthorized", type: "authentication_error", code: "admin_token_required" },
   });
   return false;
 }
 
 async function getConfigDirectorySummary(): Promise<ConfigDirectorySummary> {
-  const homeDirectory = process.env.HOME || os.homedir();
-  const configDirectoryPath = path.join(homeDirectory, ".config", "claude");
-
+  const configDir = getClaudeConfigDir();
   try {
-    const entries = await fs.readdir(configDirectoryPath);
-    return {
-      path: configDirectoryPath,
-      exists: true,
-      entries: entries.sort(),
-    };
+    const entries = await fs.readdir(configDir);
+    return { path: configDir, exists: true, entries: entries.sort() };
   } catch {
-    return {
-      path: configDirectoryPath,
-      exists: false,
-      entries: [],
-    };
+    return { path: configDir, exists: false, entries: [] };
   }
 }
 
@@ -387,7 +359,7 @@ async function buildSetupStatus(req: Request) {
     getConfigDirectorySummary(),
   ]);
 
-  loginSession.reconcile(authStatus);
+  loginSession.reconcile(authStatus.loggedIn);
 
   const runtimeHostHeader = req.get("host") || "127.0.0.1:3456";
   const hostParts = runtimeHostHeader.split(":");
@@ -409,6 +381,7 @@ async function buildSetupStatus(req: Request) {
     claudeCli: cliStatus,
     auth: authStatus,
     configDirectory,
+    credentialsFile: getCredentialsPath(),
     envTokens: {
       oauthTokenConfigured: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN),
       oauthFdConfigured: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR),
@@ -445,351 +418,98 @@ function renderSetupPage(req: Request): string {
       --shadow: 0 18px 36px rgba(63, 44, 15, 0.08);
       --code: #1d3a4a;
     }
-
     * { box-sizing: border-box; }
     body {
-      margin: 0;
-      min-height: 100vh;
+      margin: 0; min-height: 100vh;
       font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
-      background:
-        radial-gradient(circle at top left, rgba(12, 122, 107, 0.08), transparent 28%),
-        linear-gradient(180deg, #f8f4ec 0%, var(--bg) 100%);
+      background: radial-gradient(circle at top left, rgba(12,122,107,0.08), transparent 28%),
+                  linear-gradient(180deg, #f8f4ec 0%, var(--bg) 100%);
       color: var(--text);
     }
-    main {
-      max-width: 920px;
-      margin: 0 auto;
-      padding: 24px 16px 48px;
-    }
-    .hero,
-    .panel {
+    main { max-width: 920px; margin: 0 auto; padding: 24px 16px 48px; }
+    .hero, .panel {
       border: 1px solid var(--line);
       background: linear-gradient(180deg, var(--panel) 0%, var(--panel-strong) 100%);
-      border-radius: 22px;
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(8px);
+      border-radius: 22px; box-shadow: var(--shadow); backdrop-filter: blur(8px);
     }
-    .hero {
-      padding: 24px;
-      margin-bottom: 16px;
-    }
-    h1 {
-      margin: 0;
-      font-size: clamp(2rem, 5vw, 3.25rem);
-      line-height: 0.95;
-      letter-spacing: -0.04em;
-    }
-    h2 {
-      margin: 0 0 14px;
-      font-size: 1.1rem;
-      letter-spacing: -0.02em;
-    }
-    p,
-    li,
-    dd,
-    dt,
-    summary,
-    label {
-      line-height: 1.55;
-    }
+    .hero { padding: 24px; margin-bottom: 16px; }
+    h1 { margin: 0; font-size: clamp(2rem,5vw,3.25rem); line-height: 0.95; letter-spacing: -0.04em; }
+    h2 { margin: 0 0 14px; font-size: 1.1rem; letter-spacing: -0.02em; }
+    p, li, dd, dt, summary, label { line-height: 1.55; }
     p { margin: 0; }
-    .eyebrow {
-      display: inline-block;
-      margin-bottom: 10px;
-      font-size: 0.8rem;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--muted);
-    }
-    .lead {
-      margin-top: 10px;
-      max-width: 60ch;
-      color: var(--muted);
-    }
-    .banner {
-      display: none;
-      margin-top: 18px;
-      padding: 14px 16px;
-      border-radius: 16px;
-      border: 1px solid transparent;
-      font-weight: 600;
-    }
+    .eyebrow { display: inline-block; margin-bottom: 10px; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+    .lead { margin-top: 10px; max-width: 60ch; color: var(--muted); }
+    .banner { display: none; margin-top: 18px; padding: 14px 16px; border-radius: 16px; border: 1px solid transparent; font-weight: 600; }
     .banner.visible { display: block; }
-    .banner.good {
-      color: var(--good);
-      border-color: rgba(23, 107, 69, 0.18);
-      background: rgba(23, 107, 69, 0.08);
-    }
-    .banner.warn {
-      color: var(--warn);
-      border-color: rgba(148, 98, 0, 0.18);
-      background: rgba(255, 216, 140, 0.22);
-    }
-    .banner.bad {
-      color: var(--bad);
-      border-color: rgba(165, 56, 42, 0.18);
-      background: rgba(165, 56, 42, 0.08);
-    }
-    .chip-row {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-      gap: 10px;
-      margin-top: 18px;
-    }
-    .chip {
-      padding: 14px;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: rgba(255, 255, 255, 0.55);
-    }
-    .good { color: var(--good); }
-    .bad { color: var(--bad); }
-    .warn { color: var(--warn); }
-    .chip-label {
-      display: block;
-      margin-bottom: 6px;
-      color: var(--muted);
-      font-size: 0.84rem;
-    }
-    .chip strong {
-      font-size: 1rem;
-    }
-    .panel {
-      padding: 20px;
-      margin-bottom: 16px;
-    }
-    .actions,
-    .input-row,
-    .url-actions,
-    .row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      align-items: center;
-    }
-    .steps {
-      list-style: none;
-      padding: 0;
-      margin: 0;
-      display: grid;
-      gap: 14px;
-    }
-    .step {
-      padding: 16px;
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      background: rgba(255, 255, 255, 0.5);
-    }
-    .step-head {
-      display: flex;
-      gap: 12px;
-      align-items: flex-start;
-      justify-content: space-between;
-      margin-bottom: 10px;
-    }
-    .step-number {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 30px;
-      height: 30px;
-      border-radius: 999px;
-      background: var(--accent-soft);
-      color: var(--accent-strong);
-      font-weight: 700;
-      flex: none;
-    }
-    .step-title {
-      font-weight: 700;
-      font-size: 1.05rem;
-    }
-    .step-status {
-      padding: 4px 10px;
-      border-radius: 999px;
-      background: #efe6d8;
-      color: var(--muted);
-      font-size: 0.85rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .step-status.good {
-      background: rgba(23, 107, 69, 0.1);
-      color: var(--good);
-    }
-    .step-status.warn {
-      background: rgba(255, 216, 140, 0.35);
-      color: var(--warn);
-    }
-    .step-copy {
-      display: grid;
-      gap: 8px;
-      color: var(--muted);
-    }
-    button {
-      border: 1px solid transparent;
-      border-radius: 14px;
-      padding: 12px 16px;
-      font: inherit;
-      font-weight: 700;
-      background: var(--accent);
-      color: #f7f4ec;
-      cursor: pointer;
-      transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
-      box-shadow: 0 8px 18px rgba(12, 122, 107, 0.16);
-    }
-    button.secondary {
-      background: transparent;
-      color: var(--text);
-      border-color: var(--line);
-      box-shadow: none;
-    }
-    button:hover:not(:disabled), button:focus-visible:not(:disabled) {
-      transform: translateY(-1px);
-      box-shadow: 0 12px 22px rgba(12, 122, 107, 0.18);
-    }
+    .banner.good { color: var(--good); border-color: rgba(23,107,69,0.18); background: rgba(23,107,69,0.08); }
+    .banner.warn { color: var(--warn); border-color: rgba(148,98,0,0.18); background: rgba(255,216,140,0.22); }
+    .banner.bad  { color: var(--bad);  border-color: rgba(165,56,42,0.18); background: rgba(165,56,42,0.08); }
+    .chip-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 18px; }
+    .chip { padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,0.55); }
+    .good { color: var(--good); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+    .chip-label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 0.84rem; }
+    .chip strong { font-size: 1rem; }
+    .panel { padding: 20px; margin-bottom: 16px; }
+    .actions, .input-row, .url-actions, .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+    .step { padding: 16px; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,0.5); }
+    .step-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; margin-bottom: 10px; }
+    .step-number { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-weight: 700; flex: none; }
+    .step-title { font-weight: 700; font-size: 1.05rem; }
+    .step-status { padding: 4px 10px; border-radius: 999px; background: #efe6d8; color: var(--muted); font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+    .step-status.good { background: rgba(23,107,69,0.1); color: var(--good); }
+    .step-status.warn { background: rgba(255,216,140,0.35); color: var(--warn); }
+    .step-copy { display: grid; gap: 8px; color: var(--muted); }
+    button { border: 1px solid transparent; border-radius: 14px; padding: 12px 16px; font: inherit; font-weight: 700; background: var(--accent); color: #f7f4ec; cursor: pointer; transition: transform 160ms ease, box-shadow 160ms ease; box-shadow: 0 8px 18px rgba(12,122,107,0.16); }
+    button.secondary { background: transparent; color: var(--text); border-color: var(--line); box-shadow: none; }
+    button:hover:not(:disabled), button:focus-visible:not(:disabled) { transform: translateY(-1px); box-shadow: 0 12px 22px rgba(12,122,107,0.18); }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
-    button:focus-visible,
-    input:focus-visible,
-    a:focus-visible,
-    summary:focus-visible {
-      outline: 3px solid rgba(12, 122, 107, 0.32);
-      outline-offset: 2px;
-    }
-    label {
-      display: block;
-      margin-bottom: 8px;
-      color: var(--muted);
-      font-size: 0.95rem;
-    }
-    input[type="text"] {
-      flex: 1 1 320px;
-      min-width: 0;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 14px 16px;
-      font: inherit;
-      background: rgba(255, 255, 255, 0.82);
-      color: var(--text);
-    }
-    code, pre {
-      font-family: "IBM Plex Mono", SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      color: var(--code);
-    }
-    code {
-      padding: 0.1em 0.35em;
-      border-radius: 0.4em;
-      background: rgba(12, 122, 107, 0.08);
-    }
-    pre {
-      margin: 14px 0 0;
-      padding: 16px;
-      border-radius: 14px;
-      border: 1px solid var(--line);
-      background: #fffdf8;
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 280px;
-      overflow: auto;
-    }
-    .url-box {
-      display: grid;
-      gap: 10px;
-      padding: 16px;
-      background: rgba(223, 243, 238, 0.6);
-      border-radius: 14px;
-      border: 1px solid rgba(12, 122, 107, 0.14);
-    }
-    .url-box.hidden {
-      display: none;
-    }
-    .link-box {
-      display: block;
-      padding: 12px 14px;
-      border-radius: 12px;
-      border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.85);
-      word-break: break-all;
-    }
-    .hint,
-    .muted {
-      color: var(--muted);
-      font-size: 0.95rem;
-    }
-    dl {
-      margin: 0;
-    }
-    .kv,
-    .state-list {
-      display: grid;
-      grid-template-columns: minmax(140px, 180px) 1fr;
-      gap: 8px 12px;
-      font-size: 0.97rem;
-    }
-    .kv dt,
-    .state-list dt {
-      color: var(--muted);
-    }
-    summary {
-      cursor: pointer;
-      font-weight: 700;
-    }
-    details[open] summary {
-      margin-bottom: 14px;
-    }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after {
-        animation: none !important;
-        transition: none !important;
-        scroll-behavior: auto !important;
-      }
-    }
-    @media (max-width: 640px) {
-      .chip-row,
-      .kv,
-      .state-list {
-        grid-template-columns: 1fr;
-      }
-      .hero,
-      .panel,
-      .step {
-        border-radius: 18px;
-      }
-      .step-head {
-        flex-direction: column;
-      }
-    }
+    button:focus-visible, input:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid rgba(12,122,107,0.32); outline-offset: 2px; }
+    label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 0.95rem; }
+    input[type="text"] { flex: 1 1 320px; min-width: 0; border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; font: inherit; background: rgba(255,255,255,0.82); color: var(--text); }
+    code, pre { font-family: "IBM Plex Mono", SFMono-Regular, Menlo, Monaco, Consolas, monospace; color: var(--code); }
+    code { padding: 0.1em 0.35em; border-radius: 0.4em; background: rgba(12,122,107,0.08); }
+    pre { margin: 14px 0 0; padding: 16px; border-radius: 14px; border: 1px solid var(--line); background: #fffdf8; white-space: pre-wrap; word-break: break-word; max-height: 280px; overflow: auto; }
+    .url-box { display: grid; gap: 10px; padding: 16px; background: rgba(223,243,238,0.6); border-radius: 14px; border: 1px solid rgba(12,122,107,0.14); }
+    .url-box.hidden { display: none; }
+    .link-box { display: block; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: rgba(255,255,255,0.85); word-break: break-all; }
+    .hint, .muted { color: var(--muted); font-size: 0.95rem; }
+    dl { margin: 0; }
+    .kv, .state-list { display: grid; grid-template-columns: minmax(140px,180px) 1fr; gap: 8px 12px; font-size: 0.97rem; }
+    .kv dt, .state-list dt { color: var(--muted); }
+    summary { cursor: pointer; font-weight: 700; }
+    details[open] summary { margin-bottom: 14px; }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+    @media (max-width: 640px) { .chip-row, .kv, .state-list { grid-template-columns: 1fr; } .hero, .panel, .step { border-radius: 18px; } .step-head { flex-direction: column; } }
   </style>
 </head>
 <body>
   <main>
     <section class="hero">
       <div class="eyebrow">Claude Max Proxy</div>
-      <h1>Setup Claude login</h1>
-      <p class="lead">Use this page to authenticate the server with Claude Code CLI. Start the login, let the browser complete sign-in, then wait for the status here to switch to logged in. Pasting a code is only a fallback now.</p>
+      <h1>Setup</h1>
+      <p class="lead">Authenticate this server with your Claude Max account. The login uses the same OAuth flow Claude Code CLI uses, but runs entirely through this page so it works on headless hosts like Railway.</p>
       <div id="statusBanner" class="banner" role="status" aria-live="polite"></div>
       <div id="summaryChips" class="chip-row" aria-live="polite"></div>
     </section>
 
     <section class="panel" aria-labelledby="setup-steps-title">
-      <h2 id="setup-steps-title">Browser-first login</h2>
+      <h2 id="setup-steps-title">Login steps</h2>
       <ol class="steps">
         <li class="step">
           <div class="step-head">
             <div class="row">
               <span class="step-number">1</span>
               <div>
-                <div class="step-title">Start a server-side Claude login</div>
-                <div class="step-copy">This launches <code>claude auth login</code> inside the running proxy and prepares the browser sign-in flow.</div>
+                <div class="step-title">Generate login link</div>
+                <div class="step-copy">Creates a one-time sign-in URL tied to this server.</div>
               </div>
             </div>
             <span id="stepStartStatus" class="step-status">Idle</span>
           </div>
           <div class="actions">
-            <button id="startButton">Start Login</button>
-            <button id="cancelButton" class="secondary">Cancel</button>
-            <button id="refreshButton" class="secondary">Refresh</button>
+            <button id="startButton">Generate Login Link</button>
+            <button id="cancelButton" class="secondary">Reset</button>
           </div>
         </li>
         <li class="step">
@@ -797,8 +517,8 @@ function renderSetupPage(req: Request): string {
             <div class="row">
               <span class="step-number">2</span>
               <div>
-                <div class="step-title">Finish sign-in in the browser</div>
-                <div class="step-copy">The page will try to open the newest Claude sign-in link automatically. If it cannot, use the button below.</div>
+                <div class="step-title">Sign in on Claude.ai</div>
+                <div class="step-copy">Open the link below in any browser (your phone, laptop, etc.), sign in with your Claude Max account, and copy the code shown after sign-in.</div>
               </div>
             </div>
             <span id="stepLinkStatus" class="step-status">Waiting</span>
@@ -806,38 +526,28 @@ function renderSetupPage(req: Request): string {
           <div id="authUrlBox" class="url-box hidden" aria-live="polite">
             <a id="authUrlLink" class="link-box" href="#" target="_blank" rel="noreferrer"></a>
             <div class="url-actions">
-              <button id="openAuthLinkButton">Open Link</button>
               <button id="copyAuthLinkButton" class="secondary">Copy Link</button>
             </div>
           </div>
-          <p id="authUrlEmptyState" class="hint">The sign-in link appears here after you start the login.</p>
-          <p class="hint" style="margin-top: 10px;">Most setups do not need a pasted auth code. Complete sign-in in the browser and then wait a few seconds for this page to detect the authenticated Claude CLI session.</p>
-          <p class="hint" style="margin-top: 10px;">If Anthropic shows <code>Authorization failed</code>, <code>Internal server error</code>, or <code>upstream connect error ... overflow</code> after sign-in, copy the full browser address from that error page and paste it into the fallback field below. If the address contains <code>code=</code>, this setup page can still extract it.</p>
-          <p class="hint" style="margin-top: 8px;">The <code>overflow</code> variant usually points to Anthropic-side cookies, a browser extension, or a proxy in front of <code>claude.ai</code>. Retry in a private window or another browser before starting a fresh login.</p>
+          <p id="authUrlEmptyState" class="hint">Click "Generate Login Link" first.</p>
         </li>
         <li class="step">
           <div class="step-head">
             <div class="row">
               <span class="step-number">3</span>
               <div>
-                <div class="step-title">Optional fallback</div>
-                <div class="step-copy">Only use this if browser sign-in finishes on an error page that still contains a Claude callback URL or raw auth code.</div>
+                <div class="step-title">Paste the auth code</div>
+                <div class="step-copy">After signing in, Claude shows a code (or redirects to a URL containing the code). Paste it below. The server exchanges it for tokens and writes credentials so the CLI can use them.</div>
               </div>
             </div>
-            <span id="stepSubmitStatus" class="step-status">Optional</span>
+            <span id="stepSubmitStatus" class="step-status">Waiting</span>
           </div>
-          <label for="authCode">Callback URL or Claude code</label>
+          <label for="authCode">Auth code or callback URL</label>
           <div class="input-row">
-            <input
-              id="authCode"
-              type="text"
-              placeholder="Only paste this if browser sign-in did not complete by itself"
-              autocomplete="off"
-              aria-describedby="authCodeHint"
-            />
-            <button id="submitCodeButton" class="secondary">Submit Fallback</button>
+            <input id="authCode" type="text" placeholder="Paste the code or the full callback URL here" autocomplete="off" />
+            <button id="submitCodeButton">Submit Code</button>
           </div>
-          <p id="authCodeHint" class="hint">If browser sign-in succeeds normally, leave this empty. If you do need it, pasting the full callback URL is preferred because it avoids truncated-code mistakes.</p>
+          <p class="hint">Pasting the full callback URL also works — the code is extracted automatically.</p>
         </li>
       </ol>
     </section>
@@ -849,7 +559,7 @@ function renderSetupPage(req: Request): string {
 
     <details class="panel">
       <summary>Diagnostics</summary>
-      <p class="muted">Use your public server URL with <code>/v1</code> as the OpenAI-compatible base URL after login succeeds. If <code>ADMIN_TOKEN</code> is configured, keep this page URL private.</p>
+      <p class="muted">After login, point your OpenAI-compatible client at <code>/v1</code> on this server.</p>
       <dl id="details" class="kv" style="margin-top: 14px;"></dl>
       <pre id="logOutput">Waiting for status...</pre>
     </details>
@@ -860,365 +570,166 @@ function renderSetupPage(req: Request): string {
     const statusUrl = token ? '/api/setup/status?token=' + encodeURIComponent(token) : '/api/setup/status';
     let lastStatus = null;
     let isBusy = false;
-    let pendingAuthPopup = null;
 
-    function byId(id) {
-      return document.getElementById(id);
-    }
+    const byId = (id) => document.getElementById(id);
+    const esc = (v) => String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const apiUrl = (p) => token ? p + '?token=' + encodeURIComponent(token) : p;
 
-    function escapeHtml(value) {
-      return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
+    function setBanner(msg, tone) { const b = byId('statusBanner'); b.textContent = msg; b.className = 'banner visible ' + tone; }
+    function clearBanner() { const b = byId('statusBanner'); b.textContent = ''; b.className = 'banner'; }
 
-    function apiUrl(path) {
-      return token ? path + '?token=' + encodeURIComponent(token) : path;
-    }
-
-    function setBanner(message, tone) {
-      const banner = byId('statusBanner');
-      banner.textContent = message;
-      banner.className = 'banner visible ' + tone;
-    }
-
-    function clearBanner() {
-      const banner = byId('statusBanner');
-      banner.textContent = '';
-      banner.className = 'banner';
-    }
-
-    function setBusy(nextBusy) {
-      isBusy = nextBusy;
-      const status = lastStatus;
-      const active = Boolean(status && status.loginFlow && status.loginFlow.active);
-      const waitingForCode = Boolean(
-        status &&
-        status.loginFlow &&
-        status.loginFlow.phase === 'waiting_for_code'
-      );
-      const isSubmitting = Boolean(
-        status &&
-        status.loginFlow &&
-        status.loginFlow.phase === 'submitting_code'
-      );
-      const isLoggedIn = Boolean(status && status.auth && status.auth.loggedIn);
-
-      byId('startButton').disabled = nextBusy || active || isLoggedIn;
-      byId('cancelButton').disabled = nextBusy || !active;
-      byId('submitCodeButton').disabled = nextBusy || !waitingForCode || isSubmitting;
-      byId('refreshButton').disabled = nextBusy;
-      byId('copyAuthLinkButton').disabled = nextBusy || !(status && status.loginFlow && status.loginFlow.authUrl);
-      byId('openAuthLinkButton').disabled = nextBusy || !(status && status.loginFlow && status.loginFlow.authUrl);
-    }
-
-    function openPendingAuthPopup() {
-      if (pendingAuthPopup && !pendingAuthPopup.closed) {
-        return;
-      }
-
-      try {
-        pendingAuthPopup = window.open('', 'claude-auth-login');
-        if (pendingAuthPopup && pendingAuthPopup.document) {
-          pendingAuthPopup.document.title = 'Claude sign-in';
-          pendingAuthPopup.document.body.innerHTML = '<p style="font-family: sans-serif; padding: 24px;">Waiting for Claude sign-in URL...</p>';
-        }
-      } catch {
-        pendingAuthPopup = null;
-      }
-    }
-
-    function maybeNavigatePendingPopup(authUrl) {
-      if (!authUrl || !pendingAuthPopup || pendingAuthPopup.closed) {
-        return;
-      }
-
-      try {
-        pendingAuthPopup.location.href = authUrl;
-        pendingAuthPopup.focus();
-      } catch {
-        // Ignore popup navigation errors and keep manual buttons available.
-      } finally {
-        pendingAuthPopup = null;
-      }
+    function setBusy(next) {
+      isBusy = next;
+      const s = lastStatus;
+      const phase = s?.loginFlow?.phase || 'idle';
+      const loggedIn = !!s?.auth?.loggedIn;
+      byId('startButton').disabled   = next || phase === 'waiting_for_code' || phase === 'exchanging' || loggedIn;
+      byId('cancelButton').disabled   = next || (phase !== 'waiting_for_code' && phase !== 'failed');
+      byId('submitCodeButton').disabled = next || phase !== 'waiting_for_code';
+      byId('copyAuthLinkButton').disabled = next || !s?.loginFlow?.authUrl;
     }
 
     async function callApi(path, method = 'GET', body) {
-      const response = await fetch(apiUrl(path), {
+      const r = await fetch(apiUrl(path), {
         method,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'X-Admin-Token': token } : {}),
-        },
+        headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Admin-Token': token } : {}) },
         body: body ? JSON.stringify(body) : undefined,
       });
-
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload?.error?.message || 'Request failed with ' + response.status);
-      }
-
-      return payload;
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error?.message || 'Request failed ' + r.status);
+      return d;
     }
 
-    function renderSummary(status) {
-      const auth = status.auth;
+    function renderSummary(s) {
+      const a = s.auth;
       const chips = [
-        {
-          label: 'Claude CLI',
-          value: status.claudeCli.ok ? 'Installed' : 'Missing',
-          className: status.claudeCli.ok ? 'good' : 'bad',
-        },
-        {
-          label: 'Auth',
-          value: auth.loggedIn ? 'Logged in' : 'Not logged in',
-          className: auth.loggedIn ? 'good' : 'warn',
-        },
-        {
-          label: 'Account',
-          value: auth.email || 'No account yet',
-          className: auth.loggedIn ? 'good' : '',
-        },
-        {
-          label: 'Subscription',
-          value: auth.subscriptionType || 'Unknown',
-          className: auth.loggedIn ? 'good' : '',
-        },
+        { l: 'CLI', v: s.claudeCli.ok ? 'Installed' : 'Missing', c: s.claudeCli.ok ? 'good' : 'bad' },
+        { l: 'Auth', v: a.loggedIn ? 'Logged in' : 'Not logged in', c: a.loggedIn ? 'good' : 'warn' },
+        { l: 'Account', v: a.email || '-', c: a.loggedIn ? 'good' : '' },
+        { l: 'Subscription', v: a.subscriptionType || '-', c: a.loggedIn ? 'good' : '' },
       ];
-
-      byId('summaryChips').innerHTML = chips.map((item) => {
-        const valueClass = item.className ? ' class="' + escapeHtml(item.className) + '"' : '';
-        return '<div class="chip">'
-          + '<span class="chip-label">' + escapeHtml(item.label) + '</span>'
-          + '<strong' + valueClass + '>' + escapeHtml(item.value) + '</strong>'
-          + '</div>';
-      }).join('');
+      byId('summaryChips').innerHTML = chips.map(i =>
+        '<div class="chip"><span class="chip-label">' + esc(i.l) + '</span><strong' + (i.c ? ' class="' + i.c + '"' : '') + '>' + esc(i.v) + '</strong></div>'
+      ).join('');
     }
 
-    function renderDetails(status) {
-      const details = [
-        ['Host', status.runtime.host + ':' + status.runtime.port],
-        ['CLI version', status.claudeCli.version || 'unknown'],
-        ['Auth method', status.auth.authMethod || 'unknown'],
-        ['API provider', status.auth.apiProvider || 'unknown'],
-        ['Config dir', status.configDirectory.path + (status.configDirectory.exists ? '' : ' (missing)')],
-        ['Config entries', status.configDirectory.entries.join(', ') || 'none'],
-        ['Admin token', status.runtime.adminTokenConfigured ? 'configured' : 'not configured'],
-        ['CORS allow origin', status.runtime.corsAllowOrigin],
-        ['Dangerous skip perms', String(status.runtime.dangerousSkipPermissions)],
-        ['OAuth env token', String(status.envTokens.oauthTokenConfigured)],
-        ['OAuth FD token', String(status.envTokens.oauthFdConfigured)],
-        ['Anthropic API key', String(status.envTokens.anthropicApiKeyConfigured)],
+    function renderDetails(s) {
+      const rows = [
+        ['Host', s.runtime.host + ':' + s.runtime.port],
+        ['CLI version', s.claudeCli.version || '-'],
+        ['Auth method', s.auth.authMethod || '-'],
+        ['API provider', s.auth.apiProvider || '-'],
+        ['Config dir', s.configDirectory.path + (s.configDirectory.exists ? '' : ' (missing)')],
+        ['Credentials file', s.credentialsFile || '-'],
+        ['Admin token', s.runtime.adminTokenConfigured ? 'yes' : 'no'],
+        ['OAuth env token', String(s.envTokens.oauthTokenConfigured)],
+        ['Anthropic API key', String(s.envTokens.anthropicApiKeyConfigured)],
       ];
-
-      byId('details').innerHTML = details.map(([key, value]) => {
-        return '<dt>' + escapeHtml(key) + '</dt><dd>' + escapeHtml(value) + '</dd>';
-      }).join('');
+      byId('details').innerHTML = rows.map(([k, v]) => '<dt>' + esc(k) + '</dt><dd>' + esc(v) + '</dd>').join('');
     }
 
-    function updateStepStatus(elementId, label, tone) {
-      const element = byId(elementId);
-      element.textContent = label;
-      element.className = tone ? 'step-status ' + tone : 'step-status';
+    function updateStep(id, label, tone) {
+      const el = byId(id);
+      el.textContent = label;
+      el.className = tone ? 'step-status ' + tone : 'step-status';
     }
 
-    function renderCurrentState(status) {
-      const loginFlow = status.loginFlow;
+    function renderState(s) {
+      const lf = s.loginFlow;
       const entries = [
-        ['Login phase', loginFlow.phase],
-        ['Claude logged in', status.auth.loggedIn ? 'yes' : 'no'],
-        ['Active login process', loginFlow.active ? 'yes' : 'no'],
-        ['Started', loginFlow.startedAt || 'not started'],
-        ['Finished', loginFlow.finishedAt || 'not finished'],
+        ['Phase', lf.phase],
+        ['Logged in', s.auth.loggedIn ? 'yes' : 'no'],
+        ['Started', lf.startedAt || '-'],
+        ['Finished', lf.finishedAt || '-'],
       ];
-
-      if (status.auth.email) {
-        entries.push(['Logged-in account', status.auth.email]);
-      }
-
-      if (loginFlow.error) {
-        entries.push(['Last error', loginFlow.error]);
-      }
-
-      byId('currentState').innerHTML = entries.map(([key, value]) => {
-        return '<dt>' + escapeHtml(key) + '</dt><dd>' + escapeHtml(value) + '</dd>';
-      }).join('');
+      if (s.auth.email) entries.push(['Account', s.auth.email]);
+      if (lf.error) entries.push(['Error', lf.error]);
+      byId('currentState').innerHTML = entries.map(([k,v]) => '<dt>' + esc(k) + '</dt><dd>' + esc(v) + '</dd>').join('');
     }
 
-    function renderLoginFlow(status) {
-      lastStatus = status;
-      const loginFlow = status.loginFlow;
+    function renderFlow(s) {
+      lastStatus = s;
+      const lf = s.loginFlow;
       const urlBox = byId('authUrlBox');
       const urlLink = byId('authUrlLink');
-      const emptyState = byId('authUrlEmptyState');
-      const logOutput = byId('logOutput');
+      const empty = byId('authUrlEmptyState');
 
-      if (loginFlow.authUrl) {
-        urlBox.classList.remove('hidden');
-        emptyState.style.display = 'none';
-        urlLink.href = loginFlow.authUrl;
-        urlLink.textContent = loginFlow.authUrl;
-        maybeNavigatePendingPopup(loginFlow.authUrl);
+      if (lf.authUrl) {
+        urlBox.classList.remove('hidden'); empty.style.display = 'none';
+        urlLink.href = lf.authUrl; urlLink.textContent = lf.authUrl;
       } else {
-        urlBox.classList.add('hidden');
-        emptyState.style.display = 'block';
-        urlLink.href = '#';
-        urlLink.textContent = '';
+        urlBox.classList.add('hidden'); empty.style.display = 'block';
+        urlLink.href = '#'; urlLink.textContent = '';
       }
+      byId('logOutput').textContent = lf.logs.join('\\n') || 'No log output yet.';
 
-      logOutput.textContent = loginFlow.logs.join('\\n') || 'No login process output yet.';
+      updateStep('stepStartStatus',
+        s.auth.loggedIn ? 'Done' : lf.authUrl ? 'Ready' : 'Idle',
+        s.auth.loggedIn ? 'good' : lf.authUrl ? 'good' : '');
+      updateStep('stepLinkStatus',
+        s.auth.loggedIn ? 'Done' : lf.authUrl ? 'Open link' : 'Waiting',
+        s.auth.loggedIn || lf.authUrl ? 'good' : '');
+      updateStep('stepSubmitStatus',
+        s.auth.loggedIn ? 'Done'
+          : lf.phase === 'exchanging' ? 'Exchanging'
+          : lf.phase === 'waiting_for_code' ? 'Ready'
+          : 'Waiting',
+        s.auth.loggedIn ? 'good' : lf.phase === 'exchanging' ? 'warn' : lf.phase === 'waiting_for_code' ? 'warn' : '');
 
-      updateStepStatus(
-        'stepStartStatus',
-        status.auth.loggedIn ? 'Done' : loginFlow.active ? 'Running' : loginFlow.startedAt ? 'Started' : 'Idle',
-        status.auth.loggedIn ? 'good' : loginFlow.active ? 'warn' : ''
-      );
-      updateStepStatus(
-        'stepLinkStatus',
-        loginFlow.authUrl ? 'Ready' : status.auth.loggedIn ? 'Done' : 'Waiting',
-        status.auth.loggedIn || loginFlow.authUrl ? 'good' : ''
-      );
-      updateStepStatus(
-        'stepSubmitStatus',
-        status.auth.loggedIn
-          ? 'Done'
-          : loginFlow.phase === 'submitting_code'
-            ? 'Checking'
-            : loginFlow.phase === 'waiting_for_code'
-              ? 'Fallback'
-              : 'Optional',
-        status.auth.loggedIn ? 'good' : loginFlow.phase === 'submitting_code' ? 'warn' : ''
-      );
-
-      if (status.auth.loggedIn) {
-        setBanner('Claude CLI is authenticated. Point your OpenAI-compatible client at /v1 on this server.', 'good');
-      } else if (loginFlow.phase === 'waiting_for_code' && loginFlow.authUrl) {
-        setBanner('Claude login is waiting for the browser flow to finish. Complete sign-in in the browser and wait here. Only use the fallback field if the browser ends on an error page that still includes the callback URL or code.', 'warn');
-      } else if (loginFlow.phase === 'submitting_code') {
-        setBanner('Fallback value submitted. Waiting for Claude CLI to confirm the login.', 'warn');
-      } else if (loginFlow.phase === 'failed') {
-        setBanner(loginFlow.error || 'Claude login failed. Start again and complete the browser sign-in with the newest link.', 'bad');
-      } else if (loginFlow.phase === 'starting') {
-        setBanner('Starting Claude login. A browser tab should open as soon as the sign-in link is ready.', 'warn');
-      } else if (loginFlow.phase === 'cancelled') {
-        setBanner('Claude login was cancelled. Start a fresh login when you are ready.', 'warn');
-      } else {
-        clearBanner();
-      }
+      if (s.auth.loggedIn) {
+        setBanner('Authenticated! Point your OpenAI client at /v1 on this server.', 'good');
+      } else if (lf.phase === 'exchanging') {
+        setBanner('Exchanging auth code for tokens...', 'warn');
+      } else if (lf.phase === 'waiting_for_code' && lf.authUrl) {
+        setBanner('Open the login link in any browser, sign in, and paste the code below.', 'warn');
+      } else if (lf.phase === 'failed') {
+        setBanner(lf.error || 'Login failed. Click "Generate Login Link" to try again.', 'bad');
+      } else { clearBanner(); }
 
       setBusy(isBusy);
     }
 
     async function refreshStatus() {
-      const response = await fetch(statusUrl, {
-        headers: token ? { 'X-Admin-Token': token } : {},
-      });
-      const status = await response.json();
-      if (!response.ok) {
-        throw new Error(status?.error?.message || 'Failed to load status');
-      }
-
-      renderSummary(status);
-      renderCurrentState(status);
-      renderDetails(status);
-      renderLoginFlow(status);
+      const r = await fetch(statusUrl, { headers: token ? { 'X-Admin-Token': token } : {} });
+      const s = await r.json();
+      if (!r.ok) throw new Error(s?.error?.message || 'Failed to load');
+      renderSummary(s); renderState(s); renderDetails(s); renderFlow(s);
     }
 
-    async function runAction(action, successMessage) {
-      try {
-        setBusy(true);
-        clearBanner();
-        await action();
-        await refreshStatus();
-        if (successMessage) {
-          setBanner(successMessage, 'good');
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Request failed';
-        setBanner(message, 'bad');
-        byId('logOutput').textContent = message;
-      } finally {
-        setBusy(false);
-      }
+    async function run(action, msg) {
+      try { setBusy(true); clearBanner(); await action(); await refreshStatus(); if (msg) setBanner(msg, 'good'); }
+      catch (e) { const m = e instanceof Error ? e.message : 'Failed'; setBanner(m, 'bad'); }
+      finally { setBusy(false); }
     }
 
-    byId('startButton').addEventListener('click', async () => {
-      openPendingAuthPopup();
-      await runAction(async () => {
-        await callApi('/api/setup/auth/start', 'POST');
-      }, 'Claude login started. Complete sign-in in the browser, then wait for this page to detect the session.');
-    });
+    byId('startButton').addEventListener('click', () => run(
+      () => callApi('/api/setup/auth/start', 'POST'),
+      'Login link generated. Open it in any browser to sign in.'
+    ));
 
-    byId('cancelButton').addEventListener('click', async () => {
-      await runAction(async () => {
-        await callApi('/api/setup/auth/cancel', 'POST');
-      }, 'Claude login cancelled.');
-    });
+    byId('cancelButton').addEventListener('click', () => run(
+      () => callApi('/api/setup/auth/cancel', 'POST'), 'Login reset.'
+    ));
 
-    byId('refreshButton').addEventListener('click', async () => {
-      await runAction(async () => {
-        await refreshStatus();
-      });
-    });
-
-    byId('submitCodeButton').addEventListener('click', async () => {
+    byId('submitCodeButton').addEventListener('click', () => {
       const code = byId('authCode').value.trim();
-      if (!code) {
-        setBanner('Paste the Claude code or callback URL before submitting.', 'bad');
-        return;
-      }
-      await runAction(async () => {
-        await callApi('/api/setup/auth/submit', 'POST', { code: code });
+      if (!code) { setBanner('Paste the auth code first.', 'bad'); return; }
+      run(async () => {
+        await callApi('/api/setup/auth/submit', 'POST', { code });
         byId('authCode').value = '';
-      }, 'Fallback value submitted. Waiting for Claude CLI to finish login.');
+      }, 'Credentials saved! Verifying...');
     });
 
-    byId('authCode').addEventListener('keydown', async (event) => {
-      if (event.key !== 'Enter') {
-        return;
-      }
-      event.preventDefault();
-      byId('submitCodeButton').click();
-    });
-
-    byId('openAuthLinkButton').addEventListener('click', () => {
-      if (!lastStatus || !lastStatus.loginFlow || !lastStatus.loginFlow.authUrl) {
-        setBanner('No Claude login URL is available yet. Start a login first.', 'bad');
-        return;
-      }
-      window.open(lastStatus.loginFlow.authUrl, '_blank', 'noopener,noreferrer');
-    });
+    byId('authCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); byId('submitCodeButton').click(); } });
 
     byId('copyAuthLinkButton').addEventListener('click', async () => {
-      if (!lastStatus || !lastStatus.loginFlow || !lastStatus.loginFlow.authUrl) {
-        setBanner('No Claude login URL is available yet. Start a login first.', 'bad');
-        return;
-      }
-
-      try {
-        await navigator.clipboard.writeText(lastStatus.loginFlow.authUrl);
-        setBanner('Claude login URL copied to clipboard.', 'good');
-      } catch {
-        setBanner('Clipboard write failed. Copy the Claude URL manually.', 'warn');
-      }
+      if (!lastStatus?.loginFlow?.authUrl) { setBanner('Generate a login link first.', 'bad'); return; }
+      try { await navigator.clipboard.writeText(lastStatus.loginFlow.authUrl); setBanner('Link copied!', 'good'); }
+      catch { setBanner('Copy failed — select and copy manually.', 'warn'); }
     });
 
-    refreshStatus().catch((error) => {
-      const message = error instanceof Error ? error.message : 'Failed to load status';
-      byId('logOutput').textContent = message;
-      setBanner(message, 'bad');
-    });
-
-    setInterval(() => {
-      refreshStatus().catch((error) => {
-        const message = error instanceof Error ? error.message : 'Failed to load status';
-        byId('logOutput').textContent = message;
-        setBanner(message, 'bad');
-      });
-    }, 3000);
+    refreshStatus().catch(e => { byId('logOutput').textContent = e.message; setBanner(e.message, 'bad'); });
+    setInterval(() => { refreshStatus().catch(() => {}); }, 3000);
   </script>
 </body>
 </html>`;
@@ -1249,14 +760,15 @@ export function handleStartAuth(req: Request, res: Response): void {
   res.json(loginSession.start());
 }
 
-export function handleSubmitAuthCode(req: Request, res: Response): void {
+export async function handleSubmitAuthCode(req: Request, res: Response): Promise<void> {
   if (!requireAdmin(req, res)) {
     return;
   }
 
   const code = typeof req.body?.code === "string" ? req.body.code : "";
   try {
-    res.json(loginSession.submitCode(code));
+    const result = await loginSession.submit(code);
+    res.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to submit auth code";
     res.status(400).json({
