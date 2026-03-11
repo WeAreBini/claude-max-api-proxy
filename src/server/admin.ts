@@ -778,6 +778,7 @@ function renderSetupPage(req: Request): string {
             </div>
           </div>
           <p id="authUrlEmptyState" class="hint">The sign-in link appears here after you start the login.</p>
+          <p class="hint" style="margin-top: 10px;">If Anthropic shows <code>Authorization failed</code> or <code>Internal server error</code> after sign-in, copy the full browser address from that error page and paste it into step 3. If the address contains <code>code=</code>, this setup page can still extract it.</p>
         </li>
         <li class="step">
           <div class="step-head">
@@ -801,7 +802,7 @@ function renderSetupPage(req: Request): string {
             />
             <button id="submitCodeButton">Submit</button>
           </div>
-          <p id="authCodeHint" class="hint">After submitting, wait for the status above to switch to logged in. If it stalls, cancel and start again with a fresh link.</p>
+          <p id="authCodeHint" class="hint">After submitting, wait for the status above to switch to logged in. If it stalls, cancel and start again with a fresh link. Pasting the full callback URL is preferred because it avoids truncated-code mistakes.</p>
         </li>
       </ol>
     </section>
