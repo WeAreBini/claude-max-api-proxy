@@ -767,13 +767,13 @@ function renderSetupPage(req: Request): string {
     <section class="hero">
       <div class="eyebrow">Claude Max Proxy</div>
       <h1>Setup Claude login</h1>
-      <p class="lead">Use this page to authenticate the server with Claude Code CLI. Start the login, open the generated URL, then paste back either the raw auth code or the full callback URL from the browser.</p>
+      <p class="lead">Use this page to authenticate the server with Claude Code CLI. Start the login, let the browser complete sign-in, then wait for the status here to switch to logged in. Pasting a code is only a fallback now.</p>
       <div id="statusBanner" class="banner" role="status" aria-live="polite"></div>
       <div id="summaryChips" class="chip-row" aria-live="polite"></div>
     </section>
 
     <section class="panel" aria-labelledby="setup-steps-title">
-      <h2 id="setup-steps-title">3-step login</h2>
+      <h2 id="setup-steps-title">Browser-first login</h2>
       <ol class="steps">
         <li class="step">
           <div class="step-head">
@@ -781,7 +781,7 @@ function renderSetupPage(req: Request): string {
               <span class="step-number">1</span>
               <div>
                 <div class="step-title">Start a server-side Claude login</div>
-                <div class="step-copy">This launches <code>claude auth login</code> inside the running proxy.</div>
+                <div class="step-copy">This launches <code>claude auth login</code> inside the running proxy and prepares the browser sign-in flow.</div>
               </div>
             </div>
             <span id="stepStartStatus" class="step-status">Idle</span>
@@ -797,8 +797,8 @@ function renderSetupPage(req: Request): string {
             <div class="row">
               <span class="step-number">2</span>
               <div>
-                <div class="step-title">Open the Claude sign-in link</div>
-                <div class="step-copy">Always use the newest link from this page. Older links can expire.</div>
+                <div class="step-title">Finish sign-in in the browser</div>
+                <div class="step-copy">The page will try to open the newest Claude sign-in link automatically. If it cannot, use the button below.</div>
               </div>
             </div>
             <span id="stepLinkStatus" class="step-status">Waiting</span>
@@ -811,7 +811,8 @@ function renderSetupPage(req: Request): string {
             </div>
           </div>
           <p id="authUrlEmptyState" class="hint">The sign-in link appears here after you start the login.</p>
-          <p class="hint" style="margin-top: 10px;">If Anthropic shows <code>Authorization failed</code>, <code>Internal server error</code>, or <code>upstream connect error ... overflow</code> after sign-in, copy the full browser address from that error page and paste it into step 3. If the address contains <code>code=</code>, this setup page can still extract it.</p>
+          <p class="hint" style="margin-top: 10px;">Most setups do not need a pasted auth code. Complete sign-in in the browser and then wait a few seconds for this page to detect the authenticated Claude CLI session.</p>
+          <p class="hint" style="margin-top: 10px;">If Anthropic shows <code>Authorization failed</code>, <code>Internal server error</code>, or <code>upstream connect error ... overflow</code> after sign-in, copy the full browser address from that error page and paste it into the fallback field below. If the address contains <code>code=</code>, this setup page can still extract it.</p>
           <p class="hint" style="margin-top: 8px;">The <code>overflow</code> variant usually points to Anthropic-side cookies, a browser extension, or a proxy in front of <code>claude.ai</code>. Retry in a private window or another browser before starting a fresh login.</p>
         </li>
         <li class="step">
@@ -819,24 +820,24 @@ function renderSetupPage(req: Request): string {
             <div class="row">
               <span class="step-number">3</span>
               <div>
-                <div class="step-title">Paste the result back here</div>
-                <div class="step-copy">You can paste either the raw Claude code or the full callback URL containing <code>?code=...</code>.</div>
+                <div class="step-title">Optional fallback</div>
+                <div class="step-copy">Only use this if browser sign-in finishes on an error page that still contains a Claude callback URL or raw auth code.</div>
               </div>
             </div>
-            <span id="stepSubmitStatus" class="step-status">Waiting</span>
+            <span id="stepSubmitStatus" class="step-status">Optional</span>
           </div>
-          <label for="authCode">Claude code or callback URL</label>
+          <label for="authCode">Callback URL or Claude code</label>
           <div class="input-row">
             <input
               id="authCode"
               type="text"
-              placeholder="Paste the code or full callback URL"
+              placeholder="Only paste this if browser sign-in did not complete by itself"
               autocomplete="off"
               aria-describedby="authCodeHint"
             />
-            <button id="submitCodeButton">Submit</button>
+            <button id="submitCodeButton" class="secondary">Submit Fallback</button>
           </div>
-          <p id="authCodeHint" class="hint">After submitting, wait for the status above to switch to logged in. If it stalls, cancel and start again with a fresh link. Pasting the full callback URL is preferred because it avoids truncated-code mistakes.</p>
+          <p id="authCodeHint" class="hint">If browser sign-in succeeds normally, leave this empty. If you do need it, pasting the full callback URL is preferred because it avoids truncated-code mistakes.</p>
         </li>
       </ol>
     </section>
@@ -859,6 +860,7 @@ function renderSetupPage(req: Request): string {
     const statusUrl = token ? '/api/setup/status?token=' + encodeURIComponent(token) : '/api/setup/status';
     let lastStatus = null;
     let isBusy = false;
+    let pendingAuthPopup = null;
 
     function byId(id) {
       return document.getElementById(id);
@@ -911,6 +913,37 @@ function renderSetupPage(req: Request): string {
       byId('refreshButton').disabled = nextBusy;
       byId('copyAuthLinkButton').disabled = nextBusy || !(status && status.loginFlow && status.loginFlow.authUrl);
       byId('openAuthLinkButton').disabled = nextBusy || !(status && status.loginFlow && status.loginFlow.authUrl);
+    }
+
+    function openPendingAuthPopup() {
+      if (pendingAuthPopup && !pendingAuthPopup.closed) {
+        return;
+      }
+
+      try {
+        pendingAuthPopup = window.open('', 'claude-auth-login');
+        if (pendingAuthPopup && pendingAuthPopup.document) {
+          pendingAuthPopup.document.title = 'Claude sign-in';
+          pendingAuthPopup.document.body.innerHTML = '<p style="font-family: sans-serif; padding: 24px;">Waiting for Claude sign-in URL...</p>';
+        }
+      } catch {
+        pendingAuthPopup = null;
+      }
+    }
+
+    function maybeNavigatePendingPopup(authUrl) {
+      if (!authUrl || !pendingAuthPopup || pendingAuthPopup.closed) {
+        return;
+      }
+
+      try {
+        pendingAuthPopup.location.href = authUrl;
+        pendingAuthPopup.focus();
+      } catch {
+        // Ignore popup navigation errors and keep manual buttons available.
+      } finally {
+        pendingAuthPopup = null;
+      }
     }
 
     async function callApi(path, method = 'GET', body) {
@@ -1028,6 +1061,7 @@ function renderSetupPage(req: Request): string {
         emptyState.style.display = 'none';
         urlLink.href = loginFlow.authUrl;
         urlLink.textContent = loginFlow.authUrl;
+        maybeNavigatePendingPopup(loginFlow.authUrl);
       } else {
         urlBox.classList.add('hidden');
         emptyState.style.display = 'block';
@@ -1054,21 +1088,21 @@ function renderSetupPage(req: Request): string {
           : loginFlow.phase === 'submitting_code'
             ? 'Checking'
             : loginFlow.phase === 'waiting_for_code'
-              ? 'Ready'
-              : 'Waiting',
+              ? 'Fallback'
+              : 'Optional',
         status.auth.loggedIn ? 'good' : loginFlow.phase === 'submitting_code' ? 'warn' : ''
       );
 
       if (status.auth.loggedIn) {
         setBanner('Claude CLI is authenticated. Point your OpenAI-compatible client at /v1 on this server.', 'good');
       } else if (loginFlow.phase === 'waiting_for_code' && loginFlow.authUrl) {
-        setBanner('Login is waiting for the code. Finish sign-in in the browser, then paste the raw code or the full callback URL here.', 'warn');
+        setBanner('Claude login is waiting for the browser flow to finish. Complete sign-in in the browser and wait here. Only use the fallback field if the browser ends on an error page that still includes the callback URL or code.', 'warn');
       } else if (loginFlow.phase === 'submitting_code') {
-        setBanner('Code submitted. Waiting for Claude CLI to confirm the login.', 'warn');
+        setBanner('Fallback value submitted. Waiting for Claude CLI to confirm the login.', 'warn');
       } else if (loginFlow.phase === 'failed') {
-        setBanner(loginFlow.error || 'Claude login failed. Start again and make sure you paste the newest callback result.', 'bad');
+        setBanner(loginFlow.error || 'Claude login failed. Start again and complete the browser sign-in with the newest link.', 'bad');
       } else if (loginFlow.phase === 'starting') {
-        setBanner('Starting Claude login. The sign-in link will appear here in a moment.', 'warn');
+        setBanner('Starting Claude login. A browser tab should open as soon as the sign-in link is ready.', 'warn');
       } else if (loginFlow.phase === 'cancelled') {
         setBanner('Claude login was cancelled. Start a fresh login when you are ready.', 'warn');
       } else {
@@ -1112,9 +1146,10 @@ function renderSetupPage(req: Request): string {
     }
 
     byId('startButton').addEventListener('click', async () => {
+      openPendingAuthPopup();
       await runAction(async () => {
         await callApi('/api/setup/auth/start', 'POST');
-      });
+      }, 'Claude login started. Complete sign-in in the browser, then wait for this page to detect the session.');
     });
 
     byId('cancelButton').addEventListener('click', async () => {
@@ -1138,7 +1173,7 @@ function renderSetupPage(req: Request): string {
       await runAction(async () => {
         await callApi('/api/setup/auth/submit', 'POST', { code: code });
         byId('authCode').value = '';
-      }, 'Code submitted. Waiting for Claude CLI to finish login.');
+      }, 'Fallback value submitted. Waiting for Claude CLI to finish login.');
     });
 
     byId('authCode').addEventListener('keydown', async (event) => {
