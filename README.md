@@ -75,6 +75,8 @@ node dist/server/standalone.js
 
 The server runs at `http://localhost:3456` by default.
 
+If Claude CLI is not authenticated yet, the server now stays up in setup mode so you can complete login in the browser at `http://localhost:3456/setup` instead of failing on boot.
+
 You can also override the bind address and port for container platforms:
 
 ```bash
@@ -236,6 +238,11 @@ curl -N -X POST http://localhost:3456/v1/chat/completions ...
 Check that the Claude CLI is in your PATH:
 ```bash
 which claude
+```
+
+If the server starts but reports that Claude CLI is not authenticated, open the setup page and complete login there:
+```bash
+open http://localhost:3456/setup
 ```
 
 ### Railway or Docker deployment

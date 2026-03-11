@@ -116,11 +116,12 @@ async function main(): Promise<void> {
   console.log("Checking authentication...");
   const authCheck = await verifyAuth();
   if (!authCheck.ok) {
-    console.error(`Error: ${authCheck.error}`);
-    console.error("Please run: claude auth login");
-    process.exit(1);
+    console.warn(`Warning: ${authCheck.error}`);
+    console.warn(`Setup UI available at http://${host === "0.0.0.0" ? "localhost" : host}:${port}/setup`);
+    console.warn("Complete Claude login in the setup UI, then retry your client request.\n");
+  } else {
+    console.log("  Authentication: OK\n");
   }
-  console.log("  Authentication: OK\n");
 
   // Start server
   try {
@@ -129,6 +130,7 @@ async function main(): Promise<void> {
     console.log(`  curl -X POST http://localhost:${port}/v1/chat/completions \\`);
     console.log(`    -H "Content-Type: application/json" \\`);
     console.log(`    -d '{"model": "claude-sonnet-4", "messages": [{"role": "user", "content": "Hello!"}]}'`);
+    console.log(`\nSetup page: http://localhost:${port}/setup`);
     console.log("\nPress Ctrl+C to stop.\n");
   } catch (err) {
     console.error("Failed to start server:", err);
