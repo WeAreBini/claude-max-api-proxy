@@ -20,6 +20,7 @@ let serverInstance: Server | null = null;
  */
 function createApp(): Express {
   const app = express();
+  const corsAllowOrigin = process.env.CORS_ALLOW_ORIGIN || "*";
 
   // Middleware
   app.use(express.json({ limit: "10mb" }));
@@ -34,7 +35,7 @@ function createApp(): Express {
 
   // CORS headers for local development
   app.use((_req: Request, res: Response, next: NextFunction) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Origin", corsAllowOrigin);
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     next();
@@ -46,6 +47,7 @@ function createApp(): Express {
   });
 
   // Routes
+  app.get("/", handleHealth);
   app.get("/health", handleHealth);
   app.get("/v1/models", handleModels);
   app.post("/v1/chat/completions", handleChatCompletions);
@@ -62,8 +64,21 @@ function createApp(): Express {
   });
 
   // Error handler
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: Error & { status?: number; type?: string }, _req: Request, res: Response, _next: NextFunction) => {
     console.error("[Server Error]:", err.message);
+
+    const isJsonSyntaxError = err instanceof SyntaxError && err.type === "entity.parse.failed";
+    if (isJsonSyntaxError) {
+      res.status(400).json({
+        error: {
+          message: "Invalid JSON body",
+          type: "invalid_request_error",
+          code: "invalid_json",
+        },
+      });
+      return;
+    }
+
     res.status(500).json({
       error: {
         message: err.message,
@@ -101,8 +116,9 @@ export async function startServer(config: ServerConfig): Promise<Server> {
     });
 
     serverInstance.listen(port, host, () => {
-      console.log(`[Server] Claude Code CLI provider running at http://${host}:${port}`);
-      console.log(`[Server] OpenAI-compatible endpoint: http://${host}:${port}/v1/chat/completions`);
+      const displayHost = host === "0.0.0.0" ? "localhost" : host;
+      console.log(`[Server] Claude Code CLI provider running at http://${displayHost}:${port}`);
+      console.log(`[Server] OpenAI-compatible endpoint: http://${displayHost}:${port}/v1/chat/completions`);
       resolve(serverInstance!);
     });
   });

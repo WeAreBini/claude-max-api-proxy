@@ -75,6 +75,14 @@ node dist/server/standalone.js
 
 The server runs at `http://localhost:3456` by default.
 
+You can also override the bind address and port for container platforms:
+
+```bash
+HOST=0.0.0.0 PORT=3456 node dist/server/standalone.js
+# or
+node dist/server/standalone.js --host 0.0.0.0 --port 3456
+```
+
 ### Test it
 
 ```bash
@@ -226,6 +234,39 @@ curl -N -X POST http://localhost:3456/v1/chat/completions ...
 Check that the Claude CLI is in your PATH:
 ```bash
 which claude
+```
+
+### Railway or Docker deployment
+
+Use the included Dockerfile and persist the Claude config directory so the CLI login survives restarts.
+
+Required runtime setup:
+
+```bash
+PORT=3456
+HOST=0.0.0.0
+```
+
+Recommended runtime setup:
+
+```bash
+# Restrict browser clients instead of using wildcard CORS in production
+CORS_ALLOW_ORIGIN=https://your-frontend.example.com
+
+# Only enable this if you explicitly want headless tool execution without prompts
+CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true
+```
+
+Persistent volume path:
+
+```bash
+/root/.config/claude
+```
+
+If the container starts but requests fail, exec into the container once and complete Claude login there:
+
+```bash
+claude auth login
 ```
 
 ## Contributing
