@@ -118,7 +118,7 @@ async function exchangeCodeForTokens(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!res.ok) {
@@ -129,7 +129,11 @@ async function exchangeCodeForTokens(
     throw new Error(`Token exchange failed (${res.status}): ${text}`);
   }
 
-  return (await res.json()) as TokenResponse;
+  const data = (await res.json()) as Record<string, unknown>;
+  if (!data.access_token) {
+    throw new Error(`Token response missing access_token: ${JSON.stringify(data)}`);
+  }
+  return data as unknown as TokenResponse;
 }
 
 /* ------------------------------------------------------------------ */
@@ -244,7 +248,7 @@ class OAuthLoginSession {
     const code = extractAuthCode(rawCode);
     this.phase = "exchanging";
     this.error = null;
-    this.log("[oauth] Exchanging authorization code for tokens…");
+    this.log("[oauth] Exchanging authorization code for tokens (this can take up to 30 seconds)…");
 
     try {
       const tokens = await exchangeCodeForTokens(code, this.codeVerifier, this.state);
