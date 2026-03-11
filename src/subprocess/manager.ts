@@ -7,8 +7,6 @@
 
 import { spawn, ChildProcess } from "child_process";
 import { EventEmitter } from "events";
-import fs from "fs/promises";
-import path from "path";
 import type {
   ClaudeCliMessage,
   ClaudeCliAssistant,
@@ -32,6 +30,13 @@ export interface SubprocessEvents {
   error: (error: Error) => void;
   close: (code: number | null) => void;
   raw: (line: string) => void;
+}
+
+export interface ClaudeAuthStatus {
+  readonly loggedIn: boolean;
+  readonly authMethod: string;
+  readonly apiProvider: string;
+  readonly raw: unknown;
 }
 
 const DEFAULT_TIMEOUT = 900000; // 15 minutes (agentic tasks can be long)
@@ -246,6 +251,53 @@ export async function verifyClaude(): Promise<{ ok: boolean; error?: string; ver
 }
 
 /**
+ * Retrieve structured Claude auth status from the CLI.
+ */
+export async function getClaudeAuthStatus(): Promise<ClaudeAuthStatus> {
+  return new Promise((resolve) => {
+    const proc = spawn("claude", ["auth", "status", "--json"], { stdio: "pipe" });
+    let stdout = "";
+    let stderr = "";
+
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    proc.on("error", () => {
+      resolve({
+        loggedIn: false,
+        authMethod: "unavailable",
+        apiProvider: "unknown",
+        raw: null,
+      });
+    });
+
+    proc.on("close", () => {
+      try {
+        const parsed = JSON.parse(stdout) as Partial<ClaudeAuthStatus>;
+        resolve({
+          loggedIn: parsed.loggedIn === true,
+          authMethod: typeof parsed.authMethod === "string" ? parsed.authMethod : "unknown",
+          apiProvider: typeof parsed.apiProvider === "string" ? parsed.apiProvider : "unknown",
+          raw: parsed,
+        });
+      } catch {
+        resolve({
+          loggedIn: false,
+          authMethod: "unknown",
+          apiProvider: "unknown",
+          raw: stderr || stdout || null,
+        });
+      }
+    });
+  });
+}
+
+/**
  * Check if Claude CLI is authenticated
  *
  * Claude Code stores credentials in the OS keychain, not a file.
@@ -253,9 +305,13 @@ export async function verifyClaude(): Promise<{ ok: boolean; error?: string; ver
  * If the CLI is installed, it typically has valid credentials from `claude auth login`.
  */
 export async function verifyAuth(): Promise<{ ok: boolean; error?: string }> {
-  // If Claude CLI is installed and the user has run `claude auth login`,
-  // credentials are stored in the OS keychain and will be used automatically.
-  // We can't easily check the keychain, so we'll just return true if the CLI exists.
-  // Authentication errors will surface when making actual API calls.
-  return { ok: true };
+  const status = await getClaudeAuthStatus();
+  if (status.loggedIn) {
+    return { ok: true };
+  }
+
+  return {
+    ok: false,
+    error: "Claude CLI is not authenticated. Complete setup with `claude auth login`.",
+  };
 }

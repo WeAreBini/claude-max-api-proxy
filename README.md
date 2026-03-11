@@ -115,6 +115,8 @@ curl -N -X POST http://localhost:3456/v1/chat/completions \
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
+| `/setup` | GET | Browser-based setup and diagnostics UI |
+| `/api/setup/status` | GET | JSON diagnostics for Claude CLI, auth, and runtime |
 | `/v1/models` | GET | List available models |
 | `/v1/chat/completions` | POST | Chat completions (streaming & non-streaming) |
 
@@ -267,6 +269,33 @@ If the container starts but requests fail, exec into the container once and comp
 
 ```bash
 claude auth login
+```
+
+### Browser-based setup UI
+
+The proxy now includes a lightweight setup page for headless hosts:
+
+```bash
+http://localhost:3456/setup
+```
+
+It can:
+
+- show Claude CLI and auth status
+- start a Claude login subprocess and display the browser URL
+- accept the returned auth code in the browser
+- show runtime diagnostics, config directory state, and recent login logs
+
+For production deployments, protect the setup page with an admin token:
+
+```bash
+ADMIN_TOKEN=replace-this-with-a-long-random-secret
+```
+
+Then open:
+
+```bash
+http://localhost:3456/setup?token=replace-this-with-a-long-random-secret
 ```
 
 ## Contributing

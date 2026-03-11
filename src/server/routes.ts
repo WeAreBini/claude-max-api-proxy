@@ -14,6 +14,13 @@ import {
 } from "../adapter/cli-to-openai.js";
 import type { OpenAIChatRequest } from "../types/openai.js";
 import type { ClaudeCliAssistant, ClaudeCliResult, ClaudeCliStreamEvent } from "../types/claude-cli.js";
+import {
+  handleCancelAuth,
+  handleSetupPage,
+  handleSetupStatus,
+  handleStartAuth,
+  handleSubmitAuthCode,
+} from "./admin.js";
 
 /**
  * Handle POST /v1/chat/completions
@@ -291,3 +298,11 @@ export function handleHealth(_req: Request, res: Response): void {
     timestamp: new Date().toISOString(),
   });
 }
+
+export {
+  handleCancelAuth,
+  handleSetupPage,
+  handleSetupStatus,
+  handleStartAuth,
+  handleSubmitAuthCode,
+};

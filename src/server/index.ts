@@ -6,7 +6,16 @@
 
 import express, { Express, Request, Response, NextFunction } from "express";
 import { createServer, Server } from "http";
-import { handleChatCompletions, handleModels, handleHealth } from "./routes.js";
+import {
+  handleCancelAuth,
+  handleChatCompletions,
+  handleHealth,
+  handleModels,
+  handleSetupPage,
+  handleSetupStatus,
+  handleStartAuth,
+  handleSubmitAuthCode,
+} from "./routes.js";
 
 export interface ServerConfig {
   port: number;
@@ -49,6 +58,11 @@ function createApp(): Express {
   // Routes
   app.get("/", handleHealth);
   app.get("/health", handleHealth);
+  app.get("/setup", handleSetupPage);
+  app.get("/api/setup/status", handleSetupStatus);
+  app.post("/api/setup/auth/start", handleStartAuth);
+  app.post("/api/setup/auth/submit", handleSubmitAuthCode);
+  app.post("/api/setup/auth/cancel", handleCancelAuth);
   app.get("/v1/models", handleModels);
   app.post("/v1/chat/completions", handleChatCompletions);
 
