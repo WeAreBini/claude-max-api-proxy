@@ -308,683 +308,901 @@ function renderSetupPage(req: Request): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Claude Max Proxy Setup</title>
+  <title>Claude Max Proxy — Setup</title>
   <style>
     :root {
-      color-scheme: light;
-      --bg: #07111f;
-      --bg-accent: #132742;
-      --panel: rgba(10, 19, 34, 0.82);
-      --panel-strong: rgba(14, 28, 48, 0.94);
-      --panel-soft: rgba(18, 35, 59, 0.72);
-      --text: #ecf3ff;
-      --muted: #9db0ce;
-      --line: rgba(140, 173, 222, 0.22);
-      --accent: #59d0ff;
-      --accent-strong: #8af7d3;
-      --accent-soft: rgba(89, 208, 255, 0.16);
-      --good: #8af7d3;
-      --bad: #ff8b8b;
-      --warn: #ffd37a;
-      --shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
-      --code: #dce8ff;
+      --bg: #0d1117;
+      --bg2: #161b22;
+      --bg3: #1c2128;
+      --border: #30363d;
+      --border-subtle: #21262d;
+      --text: #e6edf3;
+      --text-muted: #7d8590;
+      --text-subtle: #484f58;
+      --accent: #58a6ff;
+      --accent-muted: rgba(88,166,255,0.15);
+      --green: #3fb950;
+      --green-muted: rgba(63,185,80,0.15);
+      --red: #f85149;
+      --red-muted: rgba(248,81,73,0.15);
+      --yellow: #d29922;
+      --yellow-muted: rgba(210,153,34,0.15);
+      --purple: #bc8cff;
+      --purple-muted: rgba(188,140,255,0.15);
+      --radius: 8px;
+      --radius-lg: 12px;
+      --shadow: 0 1px 3px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.25);
     }
-
-    * { box-sizing: border-box; }
+    *, *::before, *::after { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
-      font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
-      background:
-        radial-gradient(circle at 15% 15%, rgba(89, 208, 255, 0.24), transparent 22%),
-        radial-gradient(circle at 85% 18%, rgba(138, 247, 211, 0.14), transparent 20%),
-        radial-gradient(circle at 50% 100%, rgba(68, 91, 255, 0.22), transparent 28%),
-        linear-gradient(180deg, var(--bg) 0%, #030812 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      background: var(--bg);
       color: var(--text);
     }
-    .shell {
-      max-width: 1240px;
-      margin: 0 auto;
-      padding: 32px 20px 56px;
+    /* ── Layout ── */
+    .topbar {
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      height: 56px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
     }
-    .hero {
-      display: grid;
-      grid-template-columns: minmax(0, 1.55fr) minmax(260px, 0.85fr);
-      gap: 20px;
-      margin-bottom: 24px;
-      padding: 28px;
-      border: 1px solid var(--line);
-      background:
-        linear-gradient(145deg, rgba(10, 19, 34, 0.96), rgba(13, 29, 49, 0.86)),
-        linear-gradient(120deg, rgba(89, 208, 255, 0.1), transparent 40%);
-      border-radius: 28px;
-      box-shadow: var(--shadow);
-      overflow: hidden;
+    .topbar-logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--text);
+      text-decoration: none;
     }
-    h1 {
-      margin: 0;
-      font-size: clamp(2.2rem, 6vw, 4.5rem);
-      line-height: 0.9;
-      letter-spacing: -0.06em;
-    }
-    h2 {
-      margin: 0;
-      font-size: 1rem;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      color: var(--muted);
-    }
-    p { margin: 0; line-height: 1.6; }
-    .subtle { color: var(--muted); }
-    .hero-copy {
-      display: grid;
-      gap: 14px;
-      align-content: start;
-    }
-    .eyebrow {
+    .topbar-logo svg { opacity: 0.85; }
+    .topbar-sep { width: 1px; height: 20px; background: var(--border); }
+    .topbar-title { color: var(--text-muted); font-size: 13px; }
+    .topbar-spacer { flex: 1; }
+    .badge {
       display: inline-flex;
       align-items: center;
-      width: fit-content;
-      gap: 8px;
-      padding: 8px 12px;
-      border: 1px solid rgba(138, 247, 211, 0.28);
+      gap: 5px;
+      padding: 3px 8px;
       border-radius: 999px;
-      color: var(--accent-strong);
-      background: rgba(138, 247, 211, 0.07);
-      font-size: 0.82rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      font-size: 12px;
+      font-weight: 500;
+      border: 1px solid transparent;
     }
-    .hero-side {
-      display: grid;
-      gap: 14px;
-      align-content: end;
+    .badge-green  { background: var(--green-muted);  border-color: rgba(63,185,80,0.3);   color: var(--green);  }
+    .badge-red    { background: var(--red-muted);    border-color: rgba(248,81,73,0.3);   color: var(--red);    }
+    .badge-yellow { background: var(--yellow-muted); border-color: rgba(210,153,34,0.3);  color: var(--yellow); }
+    .badge-blue   { background: var(--accent-muted); border-color: rgba(88,166,255,0.3);  color: var(--accent); }
+    .badge-purple { background: var(--purple-muted); border-color: rgba(188,140,255,0.3); color: var(--purple); }
+    .badge .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      flex-shrink: 0;
     }
-    .hero-note {
-      padding: 18px;
-      border: 1px solid var(--line);
-      border-radius: 20px;
-      background: rgba(255, 255, 255, 0.04);
-      backdrop-filter: blur(12px);
+    .badge .dot.pulse { animation: dot-pulse 2s ease infinite; }
+    @keyframes dot-pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.35; }
     }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
+    .container { max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }
+    /* ── Page header ── */
+    .page-header { margin-bottom: 24px; }
+    .page-header h1 {
+      margin: 0 0 6px;
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+    }
+    .page-header p { margin: 0; color: var(--text-muted); }
+    /* ── Alert banner ── */
+    .alert {
+      display: none;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      border: 1px solid transparent;
       margin-bottom: 20px;
+      font-size: 13.5px;
+      line-height: 1.45;
     }
-    .card, .panel {
-      border: 1px solid var(--line);
-      border-radius: 24px;
-      background: linear-gradient(180deg, var(--panel) 0%, var(--panel-strong) 100%);
-      padding: 20px;
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(16px);
+    .alert.visible { display: flex; }
+    .alert-icon { flex-shrink: 0; margin-top: 1px; }
+    .alert.good   { background: var(--green-muted);  border-color: rgba(63,185,80,0.35);   color: #7ee787; }
+    .alert.warn   { background: var(--yellow-muted); border-color: rgba(210,153,34,0.35);  color: #e3b341; }
+    .alert.bad    { background: var(--red-muted);    border-color: rgba(248,81,73,0.35);   color: #ff7b72; }
+    /* ── Status cards ── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
     }
-    .card {
-      position: relative;
+    .stat-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+    }
+    .stat-card-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    .stat-card-value {
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+      margin-bottom: 4px;
+    }
+    .stat-card-detail { font-size: 12px; color: var(--text-muted); }
+    .stat-card-value.good   { color: var(--green);  }
+    .stat-card-value.bad    { color: var(--red);    }
+    .stat-card-value.warn   { color: var(--yellow); }
+    .stat-card-value.blue   { color: var(--accent); }
+    /* ── Main layout ── */
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 16px;
+      align-items: start;
+    }
+    /* ── Panel ── */
+    .panel {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
       overflow: hidden;
     }
-    .card::after {
+    .panel-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .panel-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      margin: 0;
+    }
+    .panel-body { padding: 16px; }
+    /* ── Steps ── */
+    .steps { display: grid; gap: 0; }
+    .step {
+      display: grid;
+      grid-template-columns: 36px 1fr;
+      gap: 0 14px;
+      position: relative;
+    }
+    .step:not(:last-child) .step-line::after {
       content: "";
       position: absolute;
-      inset: auto -18% -42% auto;
-      width: 130px;
-      height: 130px;
-      border-radius: 999px;
-      background: radial-gradient(circle, rgba(89, 208, 255, 0.18), transparent 70%);
-      pointer-events: none;
+      top: 36px;
+      left: 17px;
+      width: 2px;
+      bottom: 0;
+      background: var(--border);
     }
-    .metric {
-      font-size: clamp(1.8rem, 4vw, 2.6rem);
-      line-height: 0.95;
-      margin: 10px 0 8px;
-      letter-spacing: -0.04em;
-    }
-    .good { color: var(--good); }
-    .bad { color: var(--bad); }
-    .warn { color: var(--warn); }
-    .row {
+    .step-num-col {
       display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
+      flex-direction: column;
       align-items: center;
+      position: relative;
     }
-    .button-row {
+    .step-num {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: var(--bg3);
       display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      margin-bottom: 18px;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      flex-shrink: 0;
+      position: relative;
+      z-index: 1;
+      transition: background 0.2s, border-color 0.2s, color 0.2s;
     }
-    button {
-      border: 1px solid transparent;
-      border-radius: 999px;
-      padding: 12px 18px;
-      font: inherit;
-      font-weight: 700;
-      letter-spacing: 0.01em;
-      background: linear-gradient(135deg, var(--accent), #3478ff);
-      color: #03111d;
-      cursor: pointer;
-      transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, background 160ms ease;
-      box-shadow: 0 10px 24px rgba(52, 120, 255, 0.22);
+    .step-connector {
+      flex: 1;
+      width: 2px;
+      background: var(--border);
+      margin: 4px 0;
+      min-height: 16px;
     }
-    button.secondary {
-      background: rgba(255, 255, 255, 0.06);
-      color: var(--text);
-      border-color: var(--line);
-      box-shadow: none;
+    .step-content {
+      padding: 4px 0 20px;
     }
-    button.ghost {
-      background: transparent;
-      color: var(--accent);
-      border-color: rgba(89, 208, 255, 0.35);
-      box-shadow: none;
+    .step-content-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      margin: 4px 0 6px;
     }
-    button:hover:not(:disabled), button:focus-visible:not(:disabled) {
-      transform: translateY(-1px);
-      box-shadow: 0 14px 30px rgba(52, 120, 255, 0.28);
-    }
-    button.secondary:hover:not(:disabled),
-    button.secondary:focus-visible:not(:disabled),
-    button.ghost:hover:not(:disabled),
-    button.ghost:focus-visible:not(:disabled) {
-      box-shadow: 0 0 0 4px rgba(89, 208, 255, 0.12);
-    }
-    button:disabled { opacity: 0.45; cursor: not-allowed; }
-    button:focus-visible,
-    input:focus-visible,
-    a:focus-visible {
-      outline: 3px solid rgba(138, 247, 211, 0.55);
-      outline-offset: 2px;
-    }
-    label {
-      display: block;
-      margin-bottom: 8px;
-      color: var(--muted);
-      font-size: 0.95rem;
-    }
-    input[type="text"] {
-      width: min(540px, 100%);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 14px 16px;
-      font: inherit;
-      background: rgba(255, 255, 255, 0.05);
-      color: var(--text);
-    }
-    code, pre {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      color: var(--code);
-    }
-    pre {
-      margin: 0;
-      padding: 16px;
-      border-radius: 18px;
-      border: 1px solid var(--line);
-      background: rgba(3, 10, 20, 0.78);
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 360px;
-      overflow: auto;
-    }
-    .stack {
-      display: grid;
-      gap: 16px;
-    }
-    .layout {
-      display: grid;
-      grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
-      gap: 16px;
-    }
-    .url-box {
-      display: none;
-      padding: 16px;
-      background: linear-gradient(135deg, rgba(89, 208, 255, 0.12), rgba(138, 247, 211, 0.08));
-      border-radius: 18px;
-      border: 1px solid rgba(89, 208, 255, 0.22);
-    }
-    .url-box.visible { display: block; }
-    .status-banner {
-      display: none;
-      margin-bottom: 18px;
-      padding: 14px 16px;
-      border-radius: 16px;
-      border: 1px solid transparent;
-      background: rgba(255, 255, 255, 0.04);
-    }
-    .status-banner.visible { display: block; }
-    .status-banner.good {
-      border-color: rgba(138, 247, 211, 0.24);
-      background: rgba(138, 247, 211, 0.09);
-      color: var(--good);
-    }
-    .status-banner.warn {
-      border-color: rgba(255, 211, 122, 0.28);
-      background: rgba(255, 211, 122, 0.09);
-      color: var(--warn);
-    }
-    .status-banner.bad {
-      border-color: rgba(255, 139, 139, 0.28);
-      background: rgba(255, 139, 139, 0.09);
-      color: var(--bad);
-    }
-    .kv {
-      display: grid;
-      grid-template-columns: 180px 1fr;
-      gap: 8px 12px;
-      font-size: 0.97rem;
-    }
-    .kv div:nth-child(odd) { color: var(--muted); }
-    .input-row {
-      display: grid;
-      gap: 10px;
-    }
-    .flow-meta {
-      display: grid;
-      gap: 10px;
-      margin-top: 18px;
-      padding-top: 18px;
-      border-top: 1px solid var(--line);
-    }
-    .tiny {
-      font-size: 0.88rem;
-      color: var(--muted);
-    }
-    a { color: var(--accent); }
-    .pulse {
+    .step-content-body { font-size: 13px; color: var(--text-muted); }
+    /* Step states */
+    .step.active   .step-num { border-color: var(--accent); background: var(--accent-muted); color: var(--accent); }
+    .step.done     .step-num { border-color: var(--green);  background: var(--green-muted);  color: var(--green);  }
+    .step.error    .step-num { border-color: var(--red);    background: var(--red-muted);    color: var(--red);    }
+    .step.active   .step-content-title { color: var(--accent); }
+    .step.done     .step-content-title { color: var(--green);  }
+    .step.error    .step-content-title { color: var(--red);    }
+    /* ── Buttons ── */
+    .btn {
       display: inline-flex;
       align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: var(--radius);
+      border: 1px solid transparent;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, opacity 0.15s, box-shadow 0.15s;
+      white-space: nowrap;
+    }
+    .btn-primary {
+      background: #238636;
+      border-color: rgba(240,246,252,0.1);
+      color: #fff;
+    }
+    .btn-primary:hover:not(:disabled) { background: #2ea043; box-shadow: 0 0 0 3px rgba(46,160,67,0.3); }
+    .btn-default {
+      background: var(--bg3);
+      border-color: var(--border);
+      color: var(--text);
+    }
+    .btn-default:hover:not(:disabled) { background: #30363d; }
+    .btn-accent {
+      background: var(--accent-muted);
+      border-color: rgba(88,166,255,0.35);
+      color: var(--accent);
+    }
+    .btn-accent:hover:not(:disabled) { background: rgba(88,166,255,0.25); }
+    .btn-danger {
+      background: var(--red-muted);
+      border-color: rgba(248,81,73,0.35);
+      color: var(--red);
+    }
+    .btn-danger:hover:not(:disabled) { background: rgba(248,81,73,0.25); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
       gap: 8px;
+      align-items: center;
     }
-    .pulse::before {
-      content: "";
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      background: currentColor;
-      box-shadow: 0 0 0 0 currentColor;
-      animation: pulse 1.8s infinite;
+    /* ── URL box ── */
+    .url-reveal {
+      display: none;
+      margin-top: 12px;
     }
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(138, 247, 211, 0.55); }
-      70% { box-shadow: 0 0 0 10px rgba(138, 247, 211, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(138, 247, 211, 0); }
+    .url-reveal.visible { display: block; }
+    .url-box {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: var(--accent);
+      word-break: break-all;
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }
+    /* ── Input ── */
+    .input-group { display: grid; gap: 6px; }
+    .input-label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+    .input-field {
+      width: 100%;
+      padding: 7px 11px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font: inherit;
+      font-size: 13px;
+      color: var(--text);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .input-field:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-muted);
+    }
+    .input-hint { font-size: 12px; color: var(--text-subtle); }
+    /* ── Log output ── */
+    .log-output {
+      margin: 0;
+      padding: 12px 14px;
+      background: var(--bg);
+      border-radius: var(--radius);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: #8b949e;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 280px;
+      overflow-y: auto;
+      line-height: 1.6;
+    }
+    /* ── KV list ── */
+    .kv-list { display: grid; gap: 1px; }
+    .kv-row {
+      display: grid;
+      grid-template-columns: 148px 1fr;
+      gap: 8px;
+      padding: 7px 0;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 12.5px;
+    }
+    .kv-row:last-child { border-bottom: none; }
+    .kv-key { color: var(--text-muted); }
+    .kv-val { color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; word-break: break-all; }
+    /* ── Note list ── */
+    .note-list { display: grid; gap: 10px; }
+    .note-item { font-size: 12.5px; color: var(--text-muted); line-height: 1.55; padding-left: 14px; position: relative; }
+    .note-item::before { content: "·"; position: absolute; left: 0; color: var(--text-subtle); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; background: rgba(110,118,129,0.15); padding: 2px 5px; border-radius: 4px; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    /* ── Divider ── */
+    .divider { border: none; border-top: 1px solid var(--border-subtle); margin: 14px 0; }
+    /* ── Loading state ── */
+    #loadingOverlay {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-muted);
+      font-size: 13px;
+      padding: 8px 0 16px;
+    }
+    #loadingOverlay.hidden { display: none; }
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* ── Responsive ── */
+    @media (max-width: 760px) {
+      .main-grid { grid-template-columns: 1fr; }
+      .topbar { padding: 0 16px; }
+      .container { padding: 24px 16px 48px; }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
         animation: none !important;
         transition: none !important;
-        scroll-behavior: auto !important;
       }
-    }
-    @media (max-width: 980px) {
-      .hero,
-      .layout {
-        grid-template-columns: 1fr;
-      }
-    }
-    @media (max-width: 640px) {
-      .kv { grid-template-columns: 1fr; }
-      .shell { padding-left: 14px; padding-right: 14px; }
-      .hero, .card, .panel { border-radius: 20px; }
     }
   </style>
 </head>
 <body>
-  <div class="shell">
-    <section class="hero">
-      <div class="hero-copy">
-        <div class="eyebrow">Railway Setup Console</div>
-        <h1>Claude Max Proxy Control Room</h1>
-        <p>This page starts Claude login from the running server, exposes the OAuth URL for browser sign-in, accepts the returned auth code, and shows whether the proxy is genuinely ready for OpenClaw or Paperclip traffic.</p>
-      </div>
-      <div class="hero-side">
-        <div class="hero-note">
-          <p><strong>How it works:</strong> start login, open the generated Claude URL, copy the auth code back here, then wait for the auth state to flip to logged in.</p>
-        </div>
-        <div class="hero-note subtle">
-          If <code>ADMIN_TOKEN</code> is configured, keep this page URL private because the token query parameter grants access to admin actions.
-        </div>
-      </div>
-    </section>
 
-    <section class="grid" id="cards"></section>
+  <!-- Top bar -->
+  <header class="topbar">
+    <span class="topbar-logo">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20A14.5 14.5 0 0 0 12 2"/><path d="M2 12h20"/>
+      </svg>
+      Claude Max Proxy
+    </span>
+    <span class="topbar-sep"></span>
+    <span class="topbar-title">Setup &amp; Authentication</span>
+    <span class="topbar-spacer"></span>
+    <span id="topbarAuthBadge" class="badge badge-yellow"><span class="dot"></span> Checking…</span>
+  </header>
 
-    <section class="layout">
-      <div class="stack">
+  <main class="container">
+
+    <!-- Page header -->
+    <div class="page-header">
+      <h1>Server Setup</h1>
+      <p>Authenticate the Claude CLI so the proxy can forward requests to your Claude Max subscription.</p>
+    </div>
+
+    <!-- Loading indicator -->
+    <div id="loadingOverlay">
+      <div class="spinner"></div>
+      Loading status…
+    </div>
+
+    <!-- Alert banner -->
+    <div id="alertBanner" class="alert" role="status" aria-live="polite">
+      <span class="alert-icon" id="alertIcon"></span>
+      <span id="alertText"></span>
+    </div>
+
+    <!-- Status cards -->
+    <div class="cards" id="statusCards">
+      <div class="stat-card">
+        <div class="stat-card-label">Claude CLI</div>
+        <div class="stat-card-value" id="cardCliValue">—</div>
+        <div class="stat-card-detail" id="cardCliDetail"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">Auth Status</div>
+        <div class="stat-card-value" id="cardAuthValue">—</div>
+        <div class="stat-card-detail" id="cardAuthDetail"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">Login Flow</div>
+        <div class="stat-card-value" id="cardPhaseValue">—</div>
+        <div class="stat-card-detail" id="cardPhaseDetail"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">Runtime</div>
+        <div class="stat-card-value blue" id="cardRuntimeValue">—</div>
+        <div class="stat-card-detail" id="cardRuntimeDetail"></div>
+      </div>
+    </div>
+
+    <!-- Main content -->
+    <div class="main-grid">
+
+      <!-- Left: Setup wizard -->
+      <div style="display:grid;gap:16px;">
         <div class="panel">
-          <div id="statusBanner" class="status-banner" role="status" aria-live="polite"></div>
-        <h2>Setup Flow</h2>
-          <div class="button-row">
-            <button id="startButton">Start Claude Login</button>
-            <button id="cancelButton" class="secondary">Cancel Login</button>
-            <button id="refreshButton" class="secondary">Refresh Status</button>
+          <div class="panel-header">
+            <h2 class="panel-title">Authentication Steps</h2>
+            <button class="btn btn-default" id="refreshButton" style="padding:4px 10px;font-size:12px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+              Refresh
+            </button>
           </div>
-          <div id="authUrlBox" class="url-box" aria-live="polite">
-            <p style="margin-bottom: 8px;"><strong>Open this Claude URL in your browser:</strong></p>
-            <p style="margin-bottom: 12px;"><a id="authUrlLink" href="#" target="_blank" rel="noreferrer"></a></p>
-            <div class="row">
-              <button id="openAuthLinkButton" class="ghost">Open Link</button>
-              <button id="copyAuthLinkButton" class="secondary">Copy Link</button>
+          <div class="panel-body">
+
+            <div class="steps">
+
+              <!-- Step 1 -->
+              <div class="step" id="step1">
+                <div class="step-num-col">
+                  <div class="step-num" id="stepNum1">1</div>
+                  <div class="step-connector"></div>
+                </div>
+                <div class="step-content">
+                  <div class="step-content-title">Start Claude Login</div>
+                  <div class="step-content-body" style="margin-bottom:10px;">
+                    Click the button below to start the <code>claude auth login</code> process on the server. A unique OAuth URL will be generated.
+                  </div>
+                  <div class="btn-row">
+                    <button class="btn btn-primary" id="startButton" disabled>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                      Start Login
+                    </button>
+                    <button class="btn btn-danger" id="cancelButton" disabled>Cancel</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Step 2 -->
+              <div class="step" id="step2">
+                <div class="step-num-col">
+                  <div class="step-num" id="stepNum2">2</div>
+                  <div class="step-connector"></div>
+                </div>
+                <div class="step-content">
+                  <div class="step-content-title">Open the URL in your browser</div>
+                  <div class="step-content-body">
+                    After starting login, an OAuth URL will appear below. Open it in your browser, sign in with your Claude account, and copy the auth code shown at the end.
+                  </div>
+                  <div class="url-reveal" id="authUrlBox" aria-live="polite">
+                    <div class="url-box" id="authUrlText"></div>
+                    <div class="btn-row">
+                      <button class="btn btn-accent" id="openAuthLinkButton" disabled>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                        Open URL
+                      </button>
+                      <button class="btn btn-default" id="copyAuthLinkButton" disabled>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        Copy URL
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Step 3 -->
+              <div class="step" id="step3">
+                <div class="step-num-col">
+                  <div class="step-num" id="stepNum3">3</div>
+                  <div class="step-connector"></div>
+                </div>
+                <div class="step-content">
+                  <div class="step-content-title">Paste and submit the auth code</div>
+                  <div class="step-content-body" style="margin-bottom:10px;">
+                    After signing in with Claude, you'll receive a one-time auth code. Paste it below and click Submit.
+                  </div>
+                  <div class="input-group" style="margin-bottom:10px;">
+                    <label class="input-label" for="authCode">Auth code</label>
+                    <input class="input-field" id="authCode" type="text" placeholder="Paste your auth code here…" autocomplete="off" aria-describedby="authCodeHint" />
+                    <span class="input-hint" id="authCodeHint">The code will be sent to the server-side login process via stdin.</span>
+                  </div>
+                  <button class="btn btn-primary" id="submitCodeButton" disabled>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    Submit Code
+                  </button>
+                </div>
+              </div>
+
+              <!-- Step 4 -->
+              <div class="step" id="step4">
+                <div class="step-num-col">
+                  <div class="step-num" id="stepNum4">4</div>
+                </div>
+                <div class="step-content">
+                  <div class="step-content-title">Done — proxy is ready</div>
+                  <div class="step-content-body" id="step4Body">
+                    Once auth status shows <strong>Logged In</strong>, the proxy is ready. Point any OpenAI-compatible client at <code>/v1</code> on this host.
+                  </div>
+                </div>
+              </div>
+
             </div>
           </div>
-          <div class="input-row" style="margin-top: 16px;">
-            <label for="authCode">Claude auth code</label>
-            <div class="row">
-              <input id="authCode" type="text" placeholder="Paste the Claude auth code here" autocomplete="off" aria-describedby="authCodeHint" />
-              <button id="submitCodeButton">Submit Code</button>
+        </div>
+
+        <!-- Process log -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Process Log</h2>
+          </div>
+          <div class="panel-body" style="padding:0;">
+            <pre class="log-output" id="logOutput">Waiting for status…</pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Diagnostics + Notes -->
+      <div style="display:grid;gap:16px;">
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Live Diagnostics</h2>
+          </div>
+          <div class="panel-body" style="padding:8px 16px;">
+            <div class="kv-list" id="details"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Connection Notes</h2>
+          </div>
+          <div class="panel-body">
+            <div class="note-list">
+              <div class="note-item">Once authenticated, use <code>/v1</code> as the OpenAI-compatible base URL.</div>
+              <div class="note-item">If auth stalls, cancel the flow, start fresh, and use the newest generated URL.</div>
+              <div class="note-item">If <code>ADMIN_TOKEN</code> is set, keep this page URL private — the token in the query string grants admin access.</div>
+              <div class="note-item">The proxy supports streaming and non-streaming requests to Claude Opus 4, Sonnet 4, and Haiku 4.</div>
             </div>
-            <div id="authCodeHint" class="tiny">After signing in with the Claude URL above, paste the returned code here and submit it to the server-side login process.</div>
-          </div>
-          <div class="flow-meta tiny" id="flowMeta"></div>
-        </div>
-
-        <div class="panel">
-          <h2>Process Log</h2>
-          <pre id="logOutput">Waiting for status...</pre>
-        </div>
-      </div>
-
-      <div class="stack">
-        <div class="panel">
-          <h2>Live Diagnostics</h2>
-          <div class="kv" id="details"></div>
-        </div>
-
-        <div class="panel">
-          <h2>Connection Notes</h2>
-          <div class="stack tiny">
-            <p>Use your Railway public domain with <code>/v1</code> as the OpenAI-compatible base URL once auth shows logged in.</p>
-            <p>Paperclip and OpenClaw should point at the same host after setup is complete.</p>
-            <p>If auth gets stuck, cancel the login flow, start it again, and use the latest generated Claude URL rather than a cached older one.</p>
           </div>
         </div>
       </div>
-    </section>
-  </div>
+    </div>
+
+  </main>
 
   <script>
     const token = ${JSON.stringify(token)};
     const statusUrl = token ? '/api/setup/status?token=' + encodeURIComponent(token) : '/api/setup/status';
     let lastStatus = null;
     let isBusy = false;
+    let initialized = false;
 
-    function byId(id) {
-      return document.getElementById(id);
-    }
+    function byId(id) { return document.getElementById(id); }
 
-    function escapeHtml(value) {
-      return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
+    function esc(v) {
+      return String(v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     function apiUrl(path) {
       return token ? path + '?token=' + encodeURIComponent(token) : path;
     }
 
-    function setBanner(message, tone) {
-      const banner = byId('statusBanner');
-      banner.textContent = message;
-      banner.className = 'status-banner visible ' + tone;
+    /* ── Alert banner ── */
+    function setAlert(message, tone) {
+      const banner = byId('alertBanner');
+      const icons = {
+        good: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+        warn: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+        bad:  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+      };
+      byId('alertIcon').innerHTML = icons[tone] || '';
+      byId('alertText').textContent = message;
+      banner.className = 'alert visible ' + tone;
     }
 
-    function clearBanner() {
-      const banner = byId('statusBanner');
-      banner.textContent = '';
-      banner.className = 'status-banner';
+    function clearAlert() {
+      byId('alertBanner').className = 'alert';
     }
 
-    function setBusy(nextBusy) {
-      isBusy = nextBusy;
+    /* ── Button state ── */
+    function setButtonStates() {
       const status = lastStatus;
-      const active = Boolean(status && status.loginFlow && status.loginFlow.active);
+      const flow = status && status.loginFlow;
+      const active = Boolean(flow && flow.active);
+      const phase = flow ? flow.phase : 'idle';
+      const hasUrl = Boolean(flow && flow.authUrl);
+      const loggedIn = Boolean(status && status.auth && status.auth.loggedIn);
 
-      byId('startButton').disabled = nextBusy || active;
-      byId('cancelButton').disabled = nextBusy || !active;
-      byId('submitCodeButton').disabled = nextBusy || !active;
-      byId('refreshButton').disabled = nextBusy;
-      byId('copyAuthLinkButton').disabled = nextBusy || !(status && status.loginFlow && status.loginFlow.authUrl);
-      byId('openAuthLinkButton').disabled = nextBusy || !(status && status.loginFlow && status.loginFlow.authUrl);
+      // Submit is enabled when we have a code-waiting phase OR active session
+      // This prevents the button from staying disabled if the process briefly
+      // transitions between states while the user is pasting their code.
+      const canSubmit = active || phase === 'waiting_for_code' || phase === 'submitting_code';
+
+      byId('startButton').disabled        = isBusy || active || loggedIn;
+      byId('cancelButton').disabled       = isBusy || !active;
+      byId('submitCodeButton').disabled   = isBusy || !canSubmit;
+      byId('refreshButton').disabled      = isBusy;
+      byId('copyAuthLinkButton').disabled = isBusy || !hasUrl;
+      byId('openAuthLinkButton').disabled = isBusy || !hasUrl;
     }
 
-    async function callApi(path, method = 'GET', body) {
+    /* ── Step highlights ── */
+    function updateSteps(status) {
+      const flow = status && status.loginFlow;
+      const phase = flow ? flow.phase : 'idle';
+      const loggedIn = Boolean(status && status.auth && status.auth.loggedIn);
+      const hasUrl = Boolean(flow && flow.authUrl);
+
+      const s1 = byId('step1'), s2 = byId('step2'), s3 = byId('step3'), s4 = byId('step4');
+      const n1 = byId('stepNum1'), n2 = byId('stepNum2'), n3 = byId('stepNum3'), n4 = byId('stepNum4');
+
+      // Reset
+      [s1, s2, s3, s4].forEach((s) => s.className = 'step');
+
+      if (loggedIn) {
+        s1.className = 'step done'; n1.textContent = '✓';
+        s2.className = 'step done'; n2.textContent = '✓';
+        s3.className = 'step done'; n3.textContent = '✓';
+        s4.className = 'step done'; n4.textContent = '✓';
+      } else if (phase === 'submitting_code') {
+        s1.className = 'step done'; n1.textContent = '✓';
+        s2.className = 'step done'; n2.textContent = '✓';
+        s3.className = 'step active';
+      } else if (phase === 'waiting_for_code' && hasUrl) {
+        s1.className = 'step done'; n1.textContent = '✓';
+        s2.className = 'step active';
+        s3.className = 'step active';
+      } else if (phase === 'starting') {
+        s1.className = 'step active';
+      } else if (phase === 'failed') {
+        s1.className = 'step error'; n1.textContent = '!';
+      } else if (phase === 'cancelled') {
+        // back to idle
+      }
+    }
+
+    /* ── API call ── */
+    async function callApi(path, method, body) {
       const response = await fetch(apiUrl(path), {
-        method,
+        method: method || 'GET',
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { 'X-Admin-Token': token } : {}),
         },
         body: body ? JSON.stringify(body) : undefined,
       });
-
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(payload?.error?.message || 'Request failed with ' + response.status);
+        throw new Error(payload && payload.error && payload.error.message ? payload.error.message : 'Request failed with status ' + response.status);
       }
-
       return payload;
     }
 
-    function renderCards(status) {
-      const auth = status.auth;
-      const loginFlow = status.loginFlow;
-      const cli = status.claudeCli;
-
-      const items = [
-        {
-          title: 'Claude CLI',
-          metric: cli.ok ? 'Installed' : 'Missing',
-          className: cli.ok ? 'good' : 'bad',
-          detail: cli.version || cli.error || 'Unknown status',
-        },
-        {
-          title: 'Auth Status',
-          metric: auth.loggedIn ? 'Logged In' : 'Logged Out',
-          className: auth.loggedIn ? 'good' : 'warn',
-          detail: (auth.authMethod || 'unknown') + ' via ' + (auth.apiProvider || 'unknown'),
-        },
-        {
-          title: 'Login Flow',
-          metric: loginFlow.phase,
-          className: loginFlow.phase === 'failed' ? 'bad' : loginFlow.phase === 'succeeded' ? 'good' : 'warn',
-          detail: loginFlow.active ? 'process running' : 'no active login process',
-        },
-        {
-          title: 'Runtime',
-          metric: status.runtime.host + ':' + status.runtime.port,
-          className: 'good',
-          detail: 'uptime ' + status.uptimeSeconds + 's',
-        },
-      ];
-
-      byId('cards').innerHTML = items.map((item) => {
-        return '<div class="card">'
-          + '<h2>' + escapeHtml(item.title) + '</h2>'
-          + '<div class="metric ' + escapeHtml(item.className) + '">' + escapeHtml(item.metric) + '</div>'
-          + '<p class="subtle">' + escapeHtml(item.detail) + '</p>'
-          + '</div>';
-      }).join('');
-    }
-
-    function renderDetails(status) {
-      const details = [
-        ['Config dir', status.configDirectory.path + (status.configDirectory.exists ? '' : ' (missing)')],
-        ['Config entries', status.configDirectory.entries.join(', ') || 'none'],
-        ['Admin token', status.runtime.adminTokenConfigured ? 'configured' : 'not configured'],
-        ['Dangerous skip perms', String(status.runtime.dangerousSkipPermissions)],
-        ['CORS allow origin', status.runtime.corsAllowOrigin],
-        ['OAuth env token', String(status.envTokens.oauthTokenConfigured)],
-        ['OAuth FD token', String(status.envTokens.oauthFdConfigured)],
-        ['Anthropic API key', String(status.envTokens.anthropicApiKeyConfigured)],
-        ['Auth method', status.auth.authMethod || 'unknown'],
-        ['CLI version', status.claudeCli.version || 'unknown'],
-      ];
-
-      byId('details').innerHTML = details.map(([key, value]) => {
-        return '<div>' + escapeHtml(key) + '</div><div>' + escapeHtml(value) + '</div>';
-      }).join('');
-    }
-
-    function renderLoginFlow(status) {
+    /* ── Render status ── */
+    function renderStatus(status) {
       lastStatus = status;
-      const loginFlow = status.loginFlow;
-      const urlBox = byId('authUrlBox');
-      const urlLink = byId('authUrlLink');
-      const logOutput = byId('logOutput');
-      const flowMeta = byId('flowMeta');
 
-      const flowLines = [
-        'Phase: ' + loginFlow.phase,
-        'Active process: ' + String(loginFlow.active),
-        'Started: ' + (loginFlow.startedAt || 'not started'),
-        'Finished: ' + (loginFlow.finishedAt || 'not finished'),
-        'Last exit code: ' + (loginFlow.lastExitCode === null ? 'none' : String(loginFlow.lastExitCode)),
-      ];
-
-      if (loginFlow.error) {
-        flowLines.push('Last error: ' + loginFlow.error);
+      // Top-bar badge
+      const topBadge = byId('topbarAuthBadge');
+      if (status.auth.loggedIn) {
+        topBadge.className = 'badge badge-green';
+        topBadge.innerHTML = '<span class="dot"></span> Authenticated';
+      } else {
+        topBadge.className = 'badge badge-yellow';
+        topBadge.innerHTML = '<span class="dot pulse"></span> Not authenticated';
       }
 
-      flowMeta.innerHTML = flowLines.map((line) => '<div>' + escapeHtml(line) + '</div>').join('');
+      // Stat cards
+      const cli = status.claudeCli;
+      byId('cardCliValue').textContent = cli.ok ? 'Installed' : 'Missing';
+      byId('cardCliValue').className = 'stat-card-value ' + (cli.ok ? 'good' : 'bad');
+      byId('cardCliDetail').textContent = cli.version || cli.error || 'Unknown';
 
-      if (loginFlow.authUrl) {
+      const auth = status.auth;
+      byId('cardAuthValue').textContent = auth.loggedIn ? 'Logged In' : 'Logged Out';
+      byId('cardAuthValue').className = 'stat-card-value ' + (auth.loggedIn ? 'good' : 'warn');
+      byId('cardAuthDetail').textContent = (auth.authMethod || 'unknown') + ' · ' + (auth.apiProvider || 'unknown');
+
+      const flow = status.loginFlow;
+      byId('cardPhaseValue').textContent = flow.phase;
+      byId('cardPhaseValue').className = 'stat-card-value ' + (flow.phase === 'failed' ? 'bad' : flow.phase === 'succeeded' ? 'good' : flow.phase === 'idle' ? '' : 'blue');
+      byId('cardPhaseDetail').textContent = flow.active ? 'process running' : 'no active process';
+
+      byId('cardRuntimeValue').textContent = status.runtime.host + ':' + status.runtime.port;
+      byId('cardRuntimeDetail').textContent = 'uptime ' + status.uptimeSeconds + 's · node ' + status.runtime.nodeVersion;
+
+      // Auth URL box
+      const urlBox = byId('authUrlBox');
+      const urlText = byId('authUrlText');
+      if (flow.authUrl) {
         urlBox.classList.add('visible');
-        urlLink.href = loginFlow.authUrl;
-        urlLink.textContent = loginFlow.authUrl;
+        urlText.textContent = flow.authUrl;
       } else {
         urlBox.classList.remove('visible');
-        urlLink.href = '#';
-        urlLink.textContent = '';
+        urlText.textContent = '';
       }
 
-      logOutput.textContent = loginFlow.logs.join('\\n') || 'No login process output yet.';
+      // Log output
+      byId('logOutput').textContent = flow.logs.length ? flow.logs.join('\\n') : 'No process output yet.';
 
-      if (status.auth.loggedIn) {
-        setBanner('Claude CLI is authenticated. Your proxy is ready for OpenAI-compatible client traffic.', 'good');
-      } else if (loginFlow.phase === 'waiting_for_code' && loginFlow.authUrl) {
-        setBanner('Claude login is waiting for the auth code. Open the URL, finish sign-in, and paste the returned code here.', 'warn');
-      } else if (loginFlow.phase === 'failed') {
-        setBanner(loginFlow.error || 'Claude login failed. Start a fresh login attempt and use the newest generated URL.', 'bad');
-      } else if (loginFlow.phase === 'starting' || loginFlow.phase === 'submitting_code') {
-        setBanner('Claude login is in progress. Wait for the next prompt or the logged-in state.', 'warn');
-      } else if (loginFlow.phase === 'cancelled') {
-        setBanner('Claude login was cancelled. Start a new login attempt when you are ready.', 'warn');
+      // Diagnostics
+      const pairs = [
+        ['Config dir',    status.configDirectory.path + (status.configDirectory.exists ? '' : ' (missing)')],
+        ['Config files',  status.configDirectory.entries.join(', ') || 'none'],
+        ['Admin token',   status.runtime.adminTokenConfigured ? 'configured' : 'not set'],
+        ['Skip perms',    String(status.runtime.dangerousSkipPermissions)],
+        ['CORS origin',   status.runtime.corsAllowOrigin],
+        ['OAuth token',   String(status.envTokens.oauthTokenConfigured)],
+        ['OAuth FD',      String(status.envTokens.oauthFdConfigured)],
+        ['Anthropic key', String(status.envTokens.anthropicApiKeyConfigured)],
+        ['Auth method',   status.auth.authMethod || 'unknown'],
+        ['CLI version',   status.claudeCli.version || 'unknown'],
+      ];
+      byId('details').innerHTML = pairs.map(([k, v]) =>
+        '<div class="kv-row"><div class="kv-key">' + esc(k) + '</div><div class="kv-val">' + esc(v) + '</div></div>'
+      ).join('');
+
+      // Alert banner
+      if (auth.loggedIn) {
+        setAlert('Claude CLI is authenticated. Your proxy is ready for OpenAI-compatible client traffic.', 'good');
+      } else if (flow.phase === 'waiting_for_code' && flow.authUrl) {
+        setAlert('Open the URL in your browser, complete sign-in, then paste the auth code in Step 3.', 'warn');
+      } else if (flow.phase === 'submitting_code') {
+        setAlert('Submitting auth code… waiting for the login process to complete.', 'warn');
+      } else if (flow.phase === 'starting') {
+        setAlert('Starting Claude login process — a URL will appear shortly.', 'warn');
+      } else if (flow.phase === 'failed') {
+        setAlert(flow.error || 'Claude login failed. Cancel and start a fresh login attempt.', 'bad');
+      } else if (flow.phase === 'cancelled') {
+        setAlert('Login was cancelled. Click Start Login to try again.', 'warn');
       } else {
-        clearBanner();
+        clearAlert();
       }
 
-      setBusy(isBusy);
+      // Step highlights
+      updateSteps(status);
+
+      // Button states
+      setButtonStates();
     }
 
+    /* ── Refresh ── */
     async function refreshStatus() {
-      const response = await fetch(statusUrl, {
+      const res = await fetch(statusUrl, {
         headers: token ? { 'X-Admin-Token': token } : {},
       });
-      const status = await response.json();
-      if (!response.ok) {
-        throw new Error(status?.error?.message || 'Failed to load status');
+      const status = await res.json();
+      if (!res.ok) {
+        throw new Error(status && status.error && status.error.message ? status.error.message : 'Failed to load status');
       }
+      renderStatus(status);
 
-      renderCards(status);
-      renderDetails(status);
-      renderLoginFlow(status);
+      if (!initialized) {
+        initialized = true;
+        const overlay = byId('loadingOverlay');
+        if (overlay) overlay.className = 'hidden';
+      }
     }
 
+    /* ── runAction helper ── */
     async function runAction(action, successMessage) {
       try {
-        setBusy(true);
-        clearBanner();
+        isBusy = true;
+        setButtonStates();
+        clearAlert();
         await action();
         await refreshStatus();
-        if (successMessage) {
-          setBanner(successMessage, 'good');
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Request failed';
-        setBanner(message, 'bad');
-        byId('logOutput').textContent = message;
+        if (successMessage) setAlert(successMessage, 'good');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Request failed';
+        setAlert(msg, 'bad');
+        byId('logOutput').textContent = msg;
       } finally {
-        setBusy(false);
+        isBusy = false;
+        setButtonStates();
       }
     }
 
-    byId('startButton').addEventListener('click', async () => {
-      await runAction(async () => {
-        await callApi('/api/setup/auth/start', 'POST');
-      });
-    });
+    /* ── Event listeners ── */
+    byId('startButton').addEventListener('click', () =>
+      runAction(() => callApi('/api/setup/auth/start', 'POST'))
+    );
 
-    byId('cancelButton').addEventListener('click', async () => {
-      await runAction(async () => {
-        await callApi('/api/setup/auth/cancel', 'POST');
-      }, 'Claude login cancelled.');
-    });
+    byId('cancelButton').addEventListener('click', () =>
+      runAction(() => callApi('/api/setup/auth/cancel', 'POST'), 'Login cancelled.')
+    );
 
-    byId('refreshButton').addEventListener('click', async () => {
-      await runAction(async () => {
-        await refreshStatus();
-      });
-    });
+    byId('refreshButton').addEventListener('click', () =>
+      runAction(() => refreshStatus())
+    );
 
-    byId('submitCodeButton').addEventListener('click', async () => {
+    byId('submitCodeButton').addEventListener('click', () => {
       const code = byId('authCode').value.trim();
       if (!code) {
-        setBanner('Paste the Claude auth code before submitting.', 'bad');
+        setAlert('Paste the auth code into the field above before submitting.', 'bad');
+        const authCodeEl = byId('authCode');
+        if (authCodeEl && !authCodeEl.disabled) authCodeEl.focus();
         return;
       }
-      await runAction(async () => {
-        await callApi('/api/setup/auth/submit', 'POST', { code: code });
+      runAction(async () => {
+        await callApi('/api/setup/auth/submit', 'POST', { code });
         byId('authCode').value = '';
-      }, 'Auth code submitted to Claude login process.');
+      }, 'Auth code submitted — waiting for login to complete.');
     });
 
-    byId('authCode').addEventListener('keydown', async (event) => {
-      if (event.key !== 'Enter') {
-        return;
-      }
-      event.preventDefault();
-      byId('submitCodeButton').click();
+    byId('authCode').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); byId('submitCodeButton').click(); }
     });
 
     byId('openAuthLinkButton').addEventListener('click', () => {
-      if (!lastStatus || !lastStatus.loginFlow || !lastStatus.loginFlow.authUrl) {
-        setBanner('No Claude login URL is available yet. Start a login first.', 'bad');
-        return;
-      }
-      window.open(lastStatus.loginFlow.authUrl, '_blank', 'noopener,noreferrer');
+      const url = lastStatus && lastStatus.loginFlow && lastStatus.loginFlow.authUrl;
+      if (!url) { setAlert('No login URL yet — start the login first.', 'bad'); return; }
+      window.open(url, '_blank', 'noopener,noreferrer');
     });
 
     byId('copyAuthLinkButton').addEventListener('click', async () => {
-      if (!lastStatus || !lastStatus.loginFlow || !lastStatus.loginFlow.authUrl) {
-        setBanner('No Claude login URL is available yet. Start a login first.', 'bad');
-        return;
-      }
-
+      const url = lastStatus && lastStatus.loginFlow && lastStatus.loginFlow.authUrl;
+      if (!url) { setAlert('No login URL yet — start the login first.', 'bad'); return; }
       try {
-        await navigator.clipboard.writeText(lastStatus.loginFlow.authUrl);
-        setBanner('Claude login URL copied to clipboard.', 'good');
+        await navigator.clipboard.writeText(url);
+        setAlert('URL copied to clipboard.', 'good');
       } catch {
-        setBanner('Clipboard write failed. Copy the Claude URL manually.', 'warn');
+        setAlert('Clipboard write failed. Copy the URL from the box manually.', 'warn');
       }
     });
 
-    refreshStatus().catch((error) => {
-      const message = error instanceof Error ? error.message : 'Failed to load status';
-      byId('logOutput').textContent = message;
-      setBanner(message, 'bad');
+    /* ── Init ── */
+    refreshStatus().catch((err) => {
+      initialized = true;
+      const overlay = byId('loadingOverlay');
+      if (overlay) overlay.className = 'hidden';
+      const msg = err instanceof Error ? err.message : 'Failed to load status';
+      setAlert(msg, 'bad');
+      byId('logOutput').textContent = msg;
     });
 
     setInterval(() => {
-      refreshStatus().catch((error) => {
-        const message = error instanceof Error ? error.message : 'Failed to load status';
-        byId('logOutput').textContent = message;
-        setBanner(message, 'bad');
-      });
+      if (!isBusy) {
+        refreshStatus().catch(() => { /* silent — don't overwrite user-visible state */ });
+      }
     }, 4000);
   </script>
 </body>
